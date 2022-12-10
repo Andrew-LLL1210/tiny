@@ -19,8 +19,7 @@ pub fn main() !void {
     defer args_it.deinit();
 
     _ = args_it.skip();
-    const filename = args_it.next()
-        orelse return (stderr.writeAll(usage));
+    const filename = args_it.next() orelse return (stderr.writeAll(usage));
 
     var file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
@@ -71,11 +70,7 @@ fn parseInt(comptime T: type, src: []const u8) T {
     return acc;
 }
 
-fn tSlice(
-    comptime T: type,
-    comptime n: usize,
-    slice: []const T
-) std.meta.Tuple(&(.{T} ** n)) {
+fn tSlice(comptime T: type, comptime n: usize, slice: []const T) std.meta.Tuple(&(.{T} ** n)) {
     var tuple: std.meta.Tuple(&(.{T} ** n)) = undefined;
     inline for (tuple) |*dst, i| {
         dst.* = slice[i];
@@ -83,11 +78,7 @@ fn tSlice(
     return tuple;
 }
 
-
-
-
 pub const Machine = struct {
-
     const print_integer = 900;
     const print_string = 925;
     const input_string = 975;
@@ -115,7 +106,7 @@ pub const Machine = struct {
             .err = err,
         };
     }
-        
+
     pub fn parseListing(self: *Machine, src: Reader) !void {
         var i: u16 = 0;
         while (try nextToken(src)) |token| switch (token) {
@@ -129,7 +120,7 @@ pub const Machine = struct {
         };
     }
 
-    const Exit = error{Stop, SegFault};
+    const Exit = error{ Stop, SegFault };
 
     pub fn run(self: *Machine) !void {
         while (self.cycle()) |_| {} else |err| switch (err) {
