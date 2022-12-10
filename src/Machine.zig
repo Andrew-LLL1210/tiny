@@ -14,8 +14,8 @@ const Operation = @import("Operation.zig");
 
 const print_integer = 900;
 const print_string = 925;
-const input_string = 975;
-const input_integer = 950;
+const input_integer = 975;
+const input_string = 950;
 
 memory: [1000]Word,
 ip: u16,

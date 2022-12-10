@@ -40,14 +40,3 @@ pub fn main() !void {
 
     try listing.write(listing_, stderr);
 }
-
-// :000 91042
-//      16900
-//      00000
-// const listing = Listing {.listing = &[_]Listing.Segment{
-//     .{.begin_index = 0, .data = &[_]Word{
-//         91042,
-//         16900,
-//         0
-//     }},
-// }};
