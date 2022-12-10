@@ -139,7 +139,7 @@ pub const Machine = struct {
     }
 
     pub fn cycle(self: *Machine) !void {
-        const instruction = decodeOne(self.memory[self.ip]);
+        const instruction = Operation.decode(self.memory[self.ip]);
         self.ip += 1;
         return self.executeOperation(instruction);
     }
@@ -261,38 +261,31 @@ pub const Op = enum(u8) {
 pub const Operation = struct {
     op: Op,
     arg: u16,
-};
 
-pub fn decode(input: []const Word, alloc: Allocator) ![]const Operation {
-    var list = ArrayList(Operation).init(alloc);
-    for (input) |instruction| {
+    pub fn decodeSlice(input: []const Word, alloc: Allocator) ![]const Operation {
+        var list = ArrayList(Operation).init(alloc);
+        for (input) |instruction| {
+            const op = @intToEnum(Op, instruction / 1000);
+            const arg = @truncate(u16, instruction % 1000);
+            try list.append(.{ .op = op, .arg = arg });
+        }
+        return list.toOwnedSlice();
+    }
+
+    pub fn decode(instruction: Word) Operation {
         const op = @intToEnum(Op, instruction / 1000);
         const arg = @truncate(u16, instruction % 1000);
-        try list.append(.{ .op = op, .arg = arg });
+        return .{ .op = op, .arg = arg };
     }
-    return list.toOwnedSlice();
-}
 
-pub fn decodeOne(instruction: Word) Operation {
-    const op = @intToEnum(Op, instruction / 1000);
-    const arg = @truncate(u16, instruction % 1000);
-    return .{ .op = op, .arg = arg };
-}
-
-pub fn assembleOne(input: Operation) Word {
-    return 1000 * @intCast(Word, @enumToInt(input.op)) + input.arg;
-}
-
-pub fn assembleTo(dst: []Word, input: []const Operation) void {
-    for (input) |op, i| dst[i] = assembleOne(op);
-    // const instructions = try assemble(input, alloc);
-    // defer alloc.free(instructions);
-    // std.mem.copy(Word, dst, instructions);
-}
+    pub fn encode(input: Operation) Word {
+        return 1000 * @intCast(Word, @enumToInt(input.op)) + input.arg;
+    }
+};
 
 test "decode" {
     const input = [_]Word{ 91003, 98003 };
-    const decoded = try decode(&input, std.testing.allocator);
+    const decoded = try Operation.decodeSlice(&input, std.testing.allocator);
     defer std.testing.allocator.free(decoded);
     try std.testing.expectEqualSlices(Operation, &[_]Operation{
         .{ .op = .ld_imm, .arg = 3 },
@@ -301,11 +294,15 @@ test "decode" {
 }
 
 const Word = u24;
-const Listing = []const struct {
-    begin_index: usize,
-    data: []Word,
-};
+const Listing = struct {
+    listing: []const struct {
+        begin_index: usize,
+        data: []Word,
+    },
 
-// fn parseListing(src: []const u8, alloc: Allocator) !Listing {
-    
-// }
+    pub fn read(src: Reader, alloc: Allocator) !Listing {
+        _ = src;
+        _ = alloc;
+        @compileError("not implemented");
+    }
+};
