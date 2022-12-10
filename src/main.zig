@@ -37,6 +37,4 @@ pub fn main() !void {
     var machine = Machine.init(stdin, stdout, stderr);
     machine.loadListing(listing_);
     try machine.run();
-
-    try listing.write(listing_, stderr);
 }

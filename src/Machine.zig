@@ -14,8 +14,8 @@ const Operation = @import("Operation.zig");
 
 const print_integer = 900;
 const print_string = 925;
-const input_integer = 975;
-const input_string = 950;
+const input_integer = 950;
+const input_string = 975;
 
 memory: [1000]Word,
 ip: u16,
@@ -123,16 +123,42 @@ fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void 
     if (std.math.compare(self.acc, op, 0)) self.ip = dst;
 }
 
+/// consumes a WHOLE line of input from self.in and parses it as an integer
+/// throws an error if the line cannot be parsed as a (decimal) integer
+/// the TIDE implementation ignores end-of-line spaces; this does not,
+///     and will throw an error for a space character anywhere
 fn inputInteger(self: *Machine) !void {
-    _ = self;
+    var tmp: Word = 0;
+    while (self.in.readByte()) |char| switch (char) {
+        '\r' => {},
+        '\n' => {
+            self.acc = tmp;
+            return;
+        },
+        '0'...'9' => tmp = tmp * 10 + (char - '0'),
+        else => return error.InvalidInteger,
+    } else |err| return err;
 }
 
 fn printInteger(self: *Machine) !void {
     try self.out.print("{d}", .{self.acc});
 }
 
+/// read a line from self.in to memory starting at address self.acc
+/// string is null-terminated and does not contain a line ending
+/// leaves address of null-terminator in acc
 fn inputString(self: *Machine) !void {
-    _ = self;
+    while (self.in.readByte()) |char| switch (char) {
+        '\r' => {},
+        '\n' => {
+            self.memory[self.acc] = 0;
+            return;
+        },
+        else => {
+            self.memory[self.acc] = char;
+            self.acc += 1;
+        }
+    } else |err| return err;
 }
 
 fn printString(self: *Machine) !void {
