@@ -5,8 +5,10 @@ const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Word = u24;
 
+const listing = @import("listing.zig");
+
 const Operation = @import("Operation.zig");
-const Listing = @import("Listing.zig");
+const Listing = listing.Listing;
 const Machine = @import("Machine.zig");
 
 const usage =
@@ -28,21 +30,24 @@ pub fn main() !void {
     var file = try std.fs.cwd().openFile(filename, .{});
     defer file.close();
     const fin = file.reader();
-    _ = fin;
+
+    const listing_ = try listing.read(fin, std.heap.page_allocator);
+    defer std.heap.page_allocator.free(listing_);
 
     var machine = Machine.init(stdin, stdout, stderr);
-    machine.loadListing(listing);
-
+    machine.loadListing(listing_);
     try machine.run();
+
+    try listing.write(listing_, stderr);
 }
 
 // :000 91042
 //      16900
 //      00000
-const listing = Listing {.listing = &[_]Listing.Segment{
-    .{.begin_index = 0, .data = &[_]Word{
-        91042,
-        16900,
-        0
-    }},
-}};
+// const listing = Listing {.listing = &[_]Listing.Segment{
+//     .{.begin_index = 0, .data = &[_]Word{
+//         91042,
+//         16900,
+//         0
+//     }},
+// }};

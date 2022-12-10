@@ -4,29 +4,43 @@ const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Word = u24;
-const Listing = @This();
 
-listing: []const Segment,
-pub const Segment = struct {
-    begin_index: u16,
-    data: []const Word,
-};
+pub const Listing = []const Token;
 
-pub fn read(src: Reader, alloc: Allocator) !Listing {
-    _ = src;
-    _ = alloc;
-    @compileError("not implemented");
+pub const ReadError =
+    error { NoStartAddress, BadByte, EndOfStream }
+    || Allocator.Error
+    || std.fs.File.ReadError;
+
+/// caller owns returned memory
+pub fn read(in: Reader, alloc: Allocator) ReadError!Listing {
+    var tokens = ArrayList(Token).init(alloc);
+
+    while (try nextToken(in)) |token| try tokens.append(token);
+
+    return tokens.toOwnedSlice();
 }
 
-pub fn write(self: Listing, out: Writer) !void {
-    _ = self;
-    _ = out;
-    @compileError("not implemented");
+pub fn write(listing: Listing, out: Writer) !void {
+    var expect_i: u16 = 40404;
+    var i: u16 = 0;
+    for (listing) |token| switch (token) {
+        .addr => |x| i = x,
+        .value => |word| {
+            if (i == expect_i)
+                try out.print("     {d:0>5}\n", .{word})
+            else
+                try out.print("\n:{d:0>3} {d:0>5}\n", .{i, word});
+            
+            i += 1;
+            expect_i = i;
+        }
+    };
 }
 
 
 const Token = union(enum) {
-    adr: u16,
+    addr: u16,
     value: u24,
 };
 
@@ -38,7 +52,7 @@ fn nextToken(src: Reader) !?Token {
                 try src.readByte(),
                 try src.readByte(),
             };
-            return Token{ .adr = parseInt(u16, &digits) };
+            return Token{ .addr = parseInt(u16, &digits) };
         },
         '0'...'9' => |digit| {
             const digits: [5]u8 = .{
@@ -51,7 +65,7 @@ fn nextToken(src: Reader) !?Token {
             return Token{ .value = parseInt(u24, &digits) };
         },
         ' ', '\n', '\t', '\r' => {},
-        else => return error.BadByte,
+        else => return ReadError.BadByte,
     } else |err| switch (err) {
         error.EndOfStream => return null,
         else => return err,

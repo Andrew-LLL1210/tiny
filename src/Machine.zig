@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
-const Listing = @import("Listing.zig");
+const Listing = @import("listing.zig").Listing;
 
 const Machine = @This();
 
@@ -41,11 +41,14 @@ pub fn init(in: Reader, out: Writer, err: Writer) Machine {
 }
 
 pub fn loadListing(self: *Machine, listing: Listing) void {
-    for (listing.listing) |sequence| {
-        const begin_index = sequence.begin_index;
-        for (sequence.data) |word, i|
-            self.memory[begin_index + i] = word;
-    }
+    var i: u16 = 0;
+    for (listing) |instruction| switch (instruction) {
+        .addr => |x| i = x,
+        .value => |word| {
+            self.memory[i] = word;
+            i += 1;
+        },
+    };
 }
 
 const Exit = error{ Stop, SegFault };
