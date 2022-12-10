@@ -70,8 +70,8 @@ fn parseInt(comptime T: type, src: []const u8) T {
     return acc;
 }
 
-fn tSlice(comptime T: type, comptime n: usize, slice: []const T) std.meta.Tuple(&(.{T} ** n)) {
-    var tuple: std.meta.Tuple(&(.{T} ** n)) = undefined;
+fn tSlice(comptime T: type, comptime n: usize, slice: []const T) Tuple(&.{T} ** n) {
+    var tuple: Tuple(&.{T} ** n) = undefined;
     inline for (tuple) |*dst, i| {
         dst.* = slice[i];
     }
