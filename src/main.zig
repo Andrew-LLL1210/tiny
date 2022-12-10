@@ -5,171 +5,148 @@ const Tuple = std.meta.Tuple;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 
+const usage =
+    \\usage: tiny [program.state]
+    \\
+;
+
 pub fn main() !void {
-    const program = &programs.print_integer;
-
-    const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
+    const stdin = std.io.getStdIn().reader();
+    const stderr = std.io.getStdErr().writer();
 
-    var machine = Machine.init();
-    assembleTo(&machine.memory, program);
-    machine.acc = 342;
-    try machine.run(stdin, stdout);
+    var args_it = try std.process.argsWithAllocator(std.heap.page_allocator);
+    defer args_it.deinit();
 
-    // try stdout.writeAll("\nMemory section 100..120\n");
-    // for (machine.memory[100..120]) |x| try stdout.print("{d}, ", .{x});
-    // try stdout.writeAll("\n");
+    _ = args_it.skip();
+    const filename = args_it.next()
+        orelse return (stderr.writeAll(usage));
+
+    var file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+    const fin = file.reader();
+
+    var machine = Machine.init(stdin, stdout, stderr);
+    try machine.parseListing(fin);
+
+    try machine.run();
 }
 
-pub const programs = struct {
-    const nothing = 0;
-    /// Reads a string from the input string into memory starting at the address indicated by the accumulator.
-    /// The string will be null-terminated. The stream is read until a null or newline character;
-    ///     if a newline character is found, the written string will end with a newline.
-    /// After this subroutine returns, the accumulator contains the address at the end of the string;
-    ///     that is, it points to the null sentinel.
-    /// Calling this subroutine multiple times in a row has the effect of requesting multiple lines of input.
-    ///     the string will contain newlines and have only one null sentinel, at the very end.
-    pub const inputString = 975;
-    pub const input_string = blk: {
-        const read_loop = inputString + 1;
-        const read_loop_end = inputString + 15;
-        const if_1_end = inputString + 14;
-        const string = inputString + 17;
-        const char = inputString + 18;
-        break :blk [_]Operation{
-            Operation.init(.st_to, string),
-            Operation.init(.in, nothing), // read_loop
-            Operation.init(.st_to, char),
-            Operation.init(.sti_to, string),
-            Operation.init(.je_to, read_loop_end), // exit 1
-            Operation.init(.ld_from, string),
-            Operation.init(.add_imm, 1),
-            Operation.init(.st_to, string),
-            Operation.init(.ld_from, char), // if_1
-            Operation.init(.sub_imm, '\n'),
-            Operation.init(.jne_to, if_1_end),
-            Operation.init(.ld_imm, 0),
-            Operation.init(.sti_to, string),
-            Operation.init(.jmp_to, read_loop_end), // exit 2
-            Operation.init(.jmp_to, read_loop), // if_1_end
-            Operation.init(.ld_from, string), // read_loop_end
-            Operation.init(.ret, nothing),
-            // string
-            // char
-        };
-    };
-
-    /// Prints a null-terminated string from memory starting at the address indicated in the accumulator.
-    pub const printString = 925;
-    pub const print_string = blk: {
-        const loop = printString + 1;
-        const loop_end = printString + 8;
-        const string = printString + 9;
-        break :blk [_]Operation{
-            Operation.init(.st_to, string),
-            Operation.init(.ldi_from, string), // loop
-            Operation.init(.je_to, loop_end),
-            Operation.init(.out, nothing),
-            Operation.init(.ld_from, string),
-            Operation.init(.add_imm, 1),
-            Operation.init(.st_to, string),
-            Operation.init(.jmp_to, loop),
-            Operation.init(.ret, nothing), // loop_end
-            // string
-        };
-    };
-
-    /// Naive version.
-    pub const printInteger = 900;
-    pub const print_integer = blk: {
-        const value = printInteger + 17;
-        const q = printInteger + 18;
-        const power_ten = printInteger + 19;
-        const loop = 3;
-        break :blk [_]Operation{
-            Operation.init(.st_to, value),
-            Operation.init(.ld_imm, 100),
-            Operation.init(.mul_imm, 100),
-            Operation.init(.st_to, power_ten), // loop
-            Operation.init(.ld_from, value),
-            Operation.init(.div_by, power_ten),
-            Operation.init(.add_imm, '0'),
-            Operation.init(.out, nothing),
-            Operation.init(.sub_imm, '0'),
-            Operation.init(.mul_by, power_ten),
-            Operation.init(.st_to, q),
-            Operation.init(.ld_from, value),
-            Operation.init(.sub_by, q),
-            Operation.init(.st_to, value),
-            Operation.init(.ld_from, power_ten),
-            Operation.init(.div_imm, 10),
-            Operation.init(.jne_to, loop),
-            Operation.init(.stop, nothing),
-            // value
-            // q
-            // power_ten
-        };
-    };
-
-    /// Naive version.
-    pub const inputInteger = 950;
-    pub const input_integer = blk: {
-        break :blk [_]Operation{};
-    };
+pub const Token = union(enum) {
+    adr: u16,
+    value: u24,
 };
 
+pub fn nextToken(src: Reader) !?Token {
+    while (src.readByte()) |byte| switch (byte) {
+        ':' => {
+            const digits: [3]u8 = .{
+                try src.readByte(),
+                try src.readByte(),
+                try src.readByte(),
+            };
+            return Token{ .adr = parseInt(u16, &digits) };
+        },
+        '0'...'9' => |digit| {
+            const digits: [5]u8 = .{
+                digit,
+                try src.readByte(),
+                try src.readByte(),
+                try src.readByte(),
+                try src.readByte(),
+            };
+            return Token{ .value = parseInt(u24, &digits) };
+        },
+        ' ', '\n', '\t', '\r' => {},
+        else => return error.BadByte,
+    } else |err| switch (err) {
+        error.EndOfStream => return null,
+        else => return err,
+    }
+}
+
+fn parseInt(comptime T: type, src: []const u8) T {
+    var acc: T = 0;
+    for (src) |digit| acc = acc * 10 + digit - '0';
+    return acc;
+}
+
+fn tSlice(
+    comptime T: type,
+    comptime n: usize,
+    slice: []const T
+) std.meta.Tuple(&(.{T} ** n)) {
+    var tuple: std.meta.Tuple(&(.{T} ** n)) = undefined;
+    inline for (tuple) |*dst, i| {
+        dst.* = slice[i];
+    }
+    return tuple;
+}
+
+
+
+
 pub const Machine = struct {
-    memory: [1000]u24,
+
+    const print_integer = 900;
+    const print_string = 925;
+    const input_string = 975;
+    const input_integer = 950;
+
+    memory: [1000]Word,
     ip: u16,
-    acc: u24,
+    acc: Word,
     sp: u16,
     bp: u16,
 
-    // const rom: [100]u24 = blk: {
-    //     var _rom: [100]u24 = undefined;
-    //     assembleTo(_rom[programs.printString - 900 ..], &programs.print_string);
-    //     assembleTo(_rom[programs.inputString - 900 ..], &programs.input_string);
-    //     break :blk _rom;
-    // };
+    in: Reader,
+    out: Writer,
+    err: Writer,
 
-    pub fn init() Machine {
-        var machine: Machine = .{
+    pub fn init(in: Reader, out: Writer, err: Writer) Machine {
+        return .{
             .memory = undefined,
             .ip = 0,
             .acc = undefined,
             .sp = 900,
             .bp = 900,
+            .in = in,
+            .out = out,
+            .err = err,
         };
-        // build rom
-        const memory: []u24 = machine.memory[0..];
-        assembleTo(memory[programs.printString..], &programs.print_string);
-        assembleTo(memory[programs.inputString..], &programs.input_string);
-        assembleTo(memory[programs.inputInteger..], &programs.input_integer);
-        assembleTo(memory[programs.inputInteger..], &programs.input_integer);
-        return machine;
+    }
+        
+    pub fn parseListing(self: *Machine, src: Reader) !void {
+        var i: u16 = 0;
+        while (try nextToken(src)) |token| switch (token) {
+            .adr => |adr| {
+                i = adr;
+            },
+            .value => |value| {
+                self.memory[i] = value;
+                i += 1;
+            },
+        };
     }
 
-    const Exit = error{Stop};
+    const Exit = error{Stop, SegFault};
 
-    pub fn run(self: *Machine, in: Reader, out: Writer) !void {
-        while (self.cycle(in, out)) |_| {} else |err| switch (err) {
+    pub fn run(self: *Machine) !void {
+        while (self.cycle()) |_| {} else |err| switch (err) {
             Machine.Exit.Stop => {},
             else => return err,
         }
     }
 
-    pub fn cycle(self: *Machine, in: Reader, out: Writer) !void {
+    pub fn cycle(self: *Machine) !void {
         const instruction = decodeOne(self.memory[self.ip]);
         self.ip += 1;
-        return self.executeOperation(instruction, in, out);
+        return self.executeOperation(instruction);
     }
 
     pub fn executeOperation(
         self: *Machine,
         operation: Operation,
-        in: Reader,
-        out: Writer,
     ) !void {
         const arg = operation.arg;
         switch (operation.op) {
@@ -187,22 +164,30 @@ pub const Machine = struct {
             .mul_imm => self.acc *%= arg,
             .div_imm => self.acc /= arg,
             .ldi_from => self.acc = self.memory[self.memory[arg]],
-            .in => self.acc = try in.readByte(),
-            .out => try out.writeByte(@truncate(u8, self.acc)),
+            .in => self.acc = try self.in.readByte(),
+            .out => try self.out.writeByte(@truncate(u8, self.acc)),
             .jmp_to => self.ip = arg,
-            .je_to => {
-                if (self.acc == 0) self.ip = arg;
-            },
-            .jne_to => {
-                if (self.acc != 0) self.ip = arg;
-            },
-            .call => {
-                self.sp -= 1;
-                self.memory[self.sp] = self.ip;
-                self.sp -= 1;
-                self.memory[self.sp] = self.bp;
-                self.bp = self.sp;
-                self.ip = arg;
+            .je_to => self.conditionalJump(.eq, arg),
+            .jne_to => self.conditionalJump(.neq, arg),
+            .jl_to => self.conditionalJump(.lt, arg),
+            .jle_to => self.conditionalJump(.lte, arg),
+            .jg_to => self.conditionalJump(.gt, arg),
+            .jge_to => self.conditionalJump(.gte, arg),
+            .call => switch (arg) {
+                input_integer => try self.inputInteger(),
+                print_integer => try self.printInteger(),
+                input_string => try self.inputString(),
+                print_string => try self.printString(),
+                else => {
+                    if (arg >= 900) return Exit.SegFault;
+
+                    self.sp -= 1;
+                    self.memory[self.sp] = self.ip;
+                    self.sp -= 1;
+                    self.memory[self.sp] = self.bp;
+                    self.bp = self.sp;
+                    self.ip = arg;
+                },
             },
             .ret => {
                 self.sp = self.bp;
@@ -214,52 +199,71 @@ pub const Machine = struct {
             else => @panic("operation not implemented"),
         }
     }
+
+    fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void {
+        if (std.math.compare(self.acc, op, 0)) self.ip = dst;
+    }
+
+    fn inputInteger(self: *Machine) !void {
+        _ = self;
+    }
+
+    fn printInteger(self: *Machine) !void {
+        try self.out.print("{d}", .{self.acc});
+    }
+
+    fn inputString(self: *Machine) !void {
+        _ = self;
+    }
+
+    fn printString(self: *Machine) !void {
+        var it = std.mem.split(Word, self.memory[self.acc..], &.{'\x00'});
+        for (it.first()) |char|
+            try self.out.writeByte(@truncate(u8, char));
+    }
 };
 
 pub const Op = enum(u8) {
-    stop = 00,
-    ld_from,
-    ldi_from,
-    lda_of,
-    st_to,
-    sti_to,
-    add_by,
-    sub_by,
-    mul_by,
-    div_by,
-    in,
-    out,
-    jmp_to,
-    jg_to,
-    jl_to,
-    je_to,
-    call,
-    ret,
-    push,
-    pop,
-    ldparam_no,
-    jge_to,
-    jle_to,
-    jne_to,
-    push_from,
-    pop_to,
-    pusha_of,
+    stop = 0,
+    ld_from = 1,
+    ldi_from = 2,
+    lda_of = 3,
+    st_to = 4,
+    sti_to = 5,
+    add_by = 6,
+    sub_by = 7,
+    mul_by = 8,
+    div_by = 9,
+    in = 10,
+    out = 11,
+    jmp_to = 12,
+    jg_to = 13,
+    jl_to = 14,
+    je_to = 15,
+    call = 16,
+    ret = 17,
+    push = 18,
+    pop = 19,
+    ldparam_no = 20,
+    jge_to = 21,
+    jle_to = 22,
+    jne_to = 23,
+    push_from = 24,
+    pop_to = 25,
+    pusha_of = 26,
     ld_imm = 91,
     add_imm = 96,
-    sub_imm,
-    mul_imm,
-    div_imm,
+    sub_imm = 97,
+    mul_imm = 98,
+    div_imm = 99,
 };
 
 pub const Operation = struct {
     op: Op,
     arg: u16,
-    pub fn init(op: Op, arg: u16) Operation {
-        return .{ .op = op, .arg = arg };
-    }
 };
 
-pub fn decode(input: []const u24, alloc: Allocator) ![]const Operation {
+pub fn decode(input: []const Word, alloc: Allocator) ![]const Operation {
     var list = ArrayList(Operation).init(alloc);
     for (input) |instruction| {
         const op = @intToEnum(Op, instruction / 1000);
@@ -269,25 +273,25 @@ pub fn decode(input: []const u24, alloc: Allocator) ![]const Operation {
     return list.toOwnedSlice();
 }
 
-pub fn decodeOne(instruction: u24) Operation {
+pub fn decodeOne(instruction: Word) Operation {
     const op = @intToEnum(Op, instruction / 1000);
     const arg = @truncate(u16, instruction % 1000);
     return .{ .op = op, .arg = arg };
 }
 
-pub fn assembleOne(input: Operation) u24 {
-    return 1000 * @intCast(u24, @enumToInt(input.op)) + input.arg;
+pub fn assembleOne(input: Operation) Word {
+    return 1000 * @intCast(Word, @enumToInt(input.op)) + input.arg;
 }
 
-pub fn assembleTo(dst: []u24, input: []const Operation) void {
+pub fn assembleTo(dst: []Word, input: []const Operation) void {
     for (input) |op, i| dst[i] = assembleOne(op);
     // const instructions = try assemble(input, alloc);
     // defer alloc.free(instructions);
-    // std.mem.copy(u24, dst, instructions);
+    // std.mem.copy(Word, dst, instructions);
 }
 
 test "decode" {
-    const input = [_]u24{ 91003, 98003 };
+    const input = [_]Word{ 91003, 98003 };
     const decoded = try decode(&input, std.testing.allocator);
     defer std.testing.allocator.free(decoded);
     try std.testing.expectEqualSlices(Operation, &[_]Operation{
@@ -295,3 +299,13 @@ test "decode" {
         .{ .op = .mul_imm, .arg = 3 },
     }, decoded);
 }
+
+const Word = u24;
+const Listing = []const struct {
+    begin_index: usize,
+    data: []Word,
+};
+
+// fn parseListing(src: []const u8, alloc: Allocator) !Listing {
+    
+// }
