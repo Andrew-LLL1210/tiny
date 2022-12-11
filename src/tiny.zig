@@ -138,9 +138,16 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                     std.debug.print(" created new label table data\n", .{});
                 }
             },
-            .define_characters => @panic("define_characters not implemented"),
+            .define_characters => |string| {
+                cur_addr += @truncate(u16, string.len);
+                for (string) |char| try listing.append(.{.value = char});
+                try listing.append(.{.value = 0});
+            },
             .define_byte => |word| try listing.append(.{.value = word}),
-            .define_storage => @panic("define_storage not implemented"),
+            .define_storage => |size| {
+                cur_addr += size - 1;
+                try listing.append(.{.addr = cur_addr + size - 1});
+            },
         } else {
             std.debug.print("\"{s}\"\n", .{src});
             return error.InvalidSourceInstruction;
@@ -184,9 +191,18 @@ fn parseInstruction(line: []const u8) ?Instruction {
     var it = mem.tokenize(u8, line, " ");
     const mnemonic = it.next() orelse unreachable;
 
-    // dc
-    // if ()
+    if (mem.eql(u8, mnemonic, "dc")) {
+        // elegant string parsing**
+        // make sure it's wrapped in ""
+        const str = mem.trim(u8, it.rest(), " \t");
+        if (str[0] != '"') return null;
+        if (str[str.len - 1] != '"') return null;
 
+        const innerstr = str[1..str.len - 1];
+        // assume this is okay for now
+        return .{.define_characters = innerstr};
+    }
+    
     const arg = it.next() orelse return null;
     if (it.next()) |_| return null;
 
@@ -210,6 +226,10 @@ fn parseInstruction(line: []const u8) ?Instruction {
 
     if (mem.eql(u8, mnemonic, "db")) {
         return .{.define_byte = lib.parseInt(Word, arg) catch return null};
+    }
+
+    if (mem.eql(u8, mnemonic, "ds")) {
+        return .{.define_storage = lib.parseInt(u16, arg) catch return null};
     }
 
     return null;
