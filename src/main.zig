@@ -5,10 +5,9 @@ const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Word = u24;
 
-const listing = @import("listing.zig");
-
+const tiny = @import("tiny.zig");
 const Operation = @import("Operation.zig");
-const Listing = listing.Listing;
+const Listing = @import("listing.zig").Listing;
 const Machine = @import("Machine.zig");
 
 const usage =
@@ -31,10 +30,10 @@ pub fn main() !void {
     defer file.close();
     const fin = file.reader();
 
-    const listing_ = try listing.read(fin, std.heap.page_allocator);
-    defer std.heap.page_allocator.free(listing_);
+    const listing = try tiny.readListing(fin, std.heap.page_allocator);
+    defer std.heap.page_allocator.free(listing);
 
     var machine = Machine.init(stdin, stdout, stderr);
-    machine.loadListing(listing_);
+    machine.loadListing(listing);
     try machine.run();
 }
