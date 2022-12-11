@@ -1,7 +1,7 @@
-jmp label2
-label1: call printInteger
-jmp label3
+JMP labEL2
+label1: caLL PRINTiNTEGER
+Jmp label3
 label2: ld 6
-jmp label1
-label3:
-stop
+jmP labEL1
+labEL3:
+sTOp

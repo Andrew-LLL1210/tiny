@@ -3,6 +3,7 @@
 const std = @import("std");
 const lib = @import("lib.zig");
 const mem = std.mem;
+const ascii = std.ascii;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
@@ -11,6 +12,7 @@ const Listing = @import("listing.zig").Listing;
 const Token = @import("listing.zig").Token;
 const Operation = @import("Operation.zig");
 const Word = u24;
+const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 
 // re-exports
 pub const readListing = @import("listing.zig").read;
@@ -30,15 +32,23 @@ const LabelData = struct {
 
 const HashMap = std.HashMap([]const u8, LabelData, struct {
     pub fn hash(ctx: @This(), key: []const u8) u64 {
+        // case insensitive hashing
         _ = ctx;
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHashStrat(&hasher, key, .Deep);
-        return hasher.final();
+        var wh = std.hash.Wyhash.init(0);
+        for (key) |char| {
+            if (ascii.isLower(char)) {
+                const e = char - ('a' - 'A');
+                wh.update(mem.asBytes(&e));
+            } else {
+                wh.update(mem.asBytes(&char));
+            }
+        }
+        return wh.final();
     }
 
     pub fn eql(ctx: @This(), a: []const u8, b: []const u8) bool {
         _ = ctx;
-        return mem.eql(u8, a, b);
+        return eqlIgnoreCase(a, b);
     }
 }, 80);
 
@@ -184,14 +194,14 @@ const Instruction = union(enum) {
 fn parseInstruction(line: []const u8) ?Instruction {
     
     inline for (ops_noarg) |data| {
-        if (mem.eql(u8, line, data.mnemonic))
+        if (eqlIgnoreCase(line, data.mnemonic))
             return .{.op_noarg = data.op};
     }
     
     var it = mem.tokenize(u8, line, " ");
     const mnemonic = it.next() orelse unreachable;
 
-    if (mem.eql(u8, mnemonic, "dc")) {
+    if (eqlIgnoreCase(mnemonic, "dc")) {
         // elegant string parsing**
         // make sure it's wrapped in ""
         const str = mem.trim(u8, it.rest(), " \t");
@@ -208,7 +218,7 @@ fn parseInstruction(line: []const u8) ?Instruction {
 
     if (std.ascii.isDigit(arg[0])) {
         inline for (ops_imm) |data| {
-            if (mem.eql(u8, mnemonic, data.mnemonic))
+            if (eqlIgnoreCase(mnemonic, data.mnemonic))
                 return .{.op_imm = .{
                     .op = data.op,
                     .arg = lib.parseInt(u16, arg) catch return null,
@@ -216,7 +226,7 @@ fn parseInstruction(line: []const u8) ?Instruction {
         }
     } else {
         inline for (ops_label) |data| {
-            if (mem.eql(u8, mnemonic, data.mnemonic))
+            if (eqlIgnoreCase(mnemonic, data.mnemonic))
                 return .{.op_label = .{
                     .op = data.op,
                     .label = arg,
@@ -224,11 +234,11 @@ fn parseInstruction(line: []const u8) ?Instruction {
         }
     }
 
-    if (mem.eql(u8, mnemonic, "db")) {
+    if (eqlIgnoreCase(mnemonic, "db")) {
         return .{.define_byte = lib.parseInt(Word, arg) catch return null};
     }
 
-    if (mem.eql(u8, mnemonic, "ds")) {
+    if (eqlIgnoreCase(mnemonic, "ds")) {
         return .{.define_storage = lib.parseInt(u16, arg) catch return null};
     }
 
