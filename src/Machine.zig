@@ -41,14 +41,7 @@ pub fn init(in: Reader, out: Writer, err: Writer) Machine {
 }
 
 pub fn loadListing(self: *Machine, listing: Listing) void {
-    var i: u16 = 0;
-    for (listing) |instruction| switch (instruction) {
-        .addr => |x| i = x,
-        .value => |word| {
-            self.memory[i] = word;
-            i += 1;
-        },
-    };
+    for (listing) |m_w, i| if (m_w) |word| {self.memory[i] = word;};
 }
 
 const Exit = error{ Stop, SegFault };

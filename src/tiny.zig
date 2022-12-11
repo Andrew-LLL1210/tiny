@@ -9,7 +9,6 @@ const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Listing = @import("listing.zig").Listing;
-const Token = @import("listing.zig").Token;
 const Operation = @import("Operation.zig");
 const Word = u24;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
@@ -55,7 +54,7 @@ const HashMap = std.HashMap([]const u8, LabelData, struct {
 /// read tiny source code and produce a listing
 pub fn readSource(in: Reader, alloc: Allocator) !Listing {
     // eventual return value
-    var listing = ArrayList(Token).init(alloc);
+    var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
 
     // TODO: use a custom ctx that performs case-insensitive comparisons
@@ -72,8 +71,6 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
     try label_table.putNoClobber("printString", LabelData.init(925, alloc));
     try label_table.putNoClobber("inputInteger", LabelData.init(950, alloc));
     try label_table.putNoClobber("inputString", LabelData.init(975, alloc));
-
-    var cur_addr: u16 = 0;
 
     // holds the lines because we need them to last
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -97,51 +94,45 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
 
             // put label address in label_table
             // TODO: detect duplicate labels
+            const addr = @truncate(u16, listing.items.len);
             if (label_table.getPtr(label_name)) |label_data| {
-                label_data.addr = cur_addr;
+                label_data.addr = addr;
             } else {
-                try label_table.putNoClobber(label_name, LabelData.init(cur_addr, alloc));
+                try label_table.putNoClobber(label_name, LabelData.init(addr, alloc));
             }
 
             break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
         } else mem.trim(u8, noncomment, " \t");
 
         if (src.len == 0) continue;
-        cur_addr += 1;
 
         if (parseInstruction(src)) |inst| switch (inst) {
-            .op_noarg => |op| try listing.append(Token{
-                .value = (Operation{ .op = op, .arg = 0 }).encode(),
-            }),
-            .op_imm => |operation| try listing.append(Token{ .value = operation.encode() }),
+            .op_noarg => |op| try listing.append((Operation{ .op = op, .arg = 0 }).encode()),
+            .op_imm => |operation| try listing.append(operation.encode()),
             .op_label => |data| {
                 const token = try listing.addOne();
-                token.* = Token{
-                    .value = (Operation{ .op = data.op, .arg = 0 }).encode(),
-                };
+                token.* = (Operation{ .op = data.op, .arg = 0 }).encode();
 
                 // add to references list
                 if (label_table.getPtr(data.label)) |label_data| {
-                    try label_data.references.append(&token.*.value);
+                    try label_data.references.append(&token.*.?);
                 } else {
                     try label_table.putNoClobber(data.label, LabelData{
                         .addr = 909,
                         .references = ArrayList(*Word).init(alloc),
                     });
                     if (label_table.getPtr(data.label)) |label_data| {
-                        try label_data.references.append(&token.*.value);
+                        try label_data.references.append(&token.*.?);
                     } else unreachable;
                 }
             },
             .define_characters => |string| {
-                cur_addr += @truncate(u16, string.len);
-                for (string) |char| try listing.append(.{ .value = char });
-                try listing.append(.{ .value = 0 });
+                for (string) |char| try listing.append(char);
+                try listing.append(0);
             },
-            .define_byte => |word| try listing.append(.{ .value = word }),
+            .define_byte => |word| try listing.append(word),
             .define_storage => |size| {
-                cur_addr += size - 1;
-                try listing.append(.{ .addr = cur_addr + size - 1 });
+                try listing.appendNTimes(null, size);
             },
         } else {
             std.debug.print("invalid instruction: \"{s}\"\n", .{src});
@@ -153,10 +144,6 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
     var it = label_table.iterator();
     while (it.next()) |entry| {
         const label_data = entry.value_ptr.*;
-        std.debug.print("label '{s}' has {d} references\n", .{
-            @ptrCast([*:0]const u8, entry.key_ptr),
-            label_data.references.items.len,
-        });
         for (label_data.references.items) |word_ptr|
             word_ptr.* += label_data.addr;
     }
