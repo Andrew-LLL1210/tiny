@@ -1,7 +1,0 @@
-jmp label2
-label1: call printInteger
-jmp label3
-label2: ld 6
-jmp label1
-label3:
-stop

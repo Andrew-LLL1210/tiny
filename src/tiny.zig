@@ -139,7 +139,7 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                 }
             },
             .define_characters => @panic("define_characters not implemented"),
-            .define_byte => @panic("define_byte not implemented"),
+            .define_byte => |word| try listing.append(.{.value = word}),
             .define_storage => @panic("define_storage not implemented"),
         } else {
             std.debug.print("\"{s}\"\n", .{src});
@@ -183,6 +183,10 @@ fn parseInstruction(line: []const u8) ?Instruction {
     
     var it = mem.tokenize(u8, line, " ");
     const mnemonic = it.next() orelse unreachable;
+
+    // dc
+    // if ()
+
     const arg = it.next() orelse return null;
     if (it.next()) |_| return null;
 
@@ -202,6 +206,10 @@ fn parseInstruction(line: []const u8) ?Instruction {
                     .label = arg,
                 }};
         }
+    }
+
+    if (mem.eql(u8, mnemonic, "db")) {
+        return .{.define_byte = lib.parseInt(Word, arg) catch return null};
     }
 
     return null;
