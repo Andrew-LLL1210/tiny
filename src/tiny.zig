@@ -65,9 +65,13 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
 
     var cur_addr: u16 = 0;
 
+    // holds the lines because we need them to last
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    const line_alloc = arena.allocator();
+    defer arena.deinit();
+
     // get a line
-    while (try in.readUntilDelimiterOrEofAlloc(alloc, '\n', 200)) |rline| {
-        defer alloc.free(rline);
+    while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
         const line = mem.trimRight(u8, rline, "\r\n");
 
         // remove comment
@@ -82,19 +86,24 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
 
             // put label address in label_table
             // TODO: detect duplicate labels
+            std.debug.print("label '{s}'...", .{label_name});
+            if (label_table.contains(label_name))
+                std.debug.print(" (in table)...", .{})
+            else std.debug.print(" (not in table)...", .{});
+
             if (label_table.getPtr(label_name)) |label_data| {
                 label_data.addr = cur_addr;
+                std.debug.print(" updated address\n", .{});
             } else {
-                std.debug.print("created ahash for label '{s}'\n",
-                    .{label_name}
-                );
                 try label_table.putNoClobber(label_name, LabelData.init(cur_addr, alloc));
+                std.debug.print(" created new label table data\n", .{});
             }
 
             break :lbl mem.trim(u8, noncomment[ix+1..], " \t");
         } else mem.trim(u8, noncomment, " \t");
 
         if (src.len == 0) continue;
+        cur_addr += 1;
 
         if (parseInstruction(src)) |inst| switch (inst) {
             .op_noarg => |op|
@@ -110,15 +119,15 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                 };
 
                 // add to references list
+                std.debug.print("referenced '{s}'...", .{data.label});
                 if (label_table.contains(data.label))
-                    std.debug.print("table has key '{s}'\n", .{data.label})
-                else std.debug.print("table does not have key '{s}'\n", .{data.label});
+                    std.debug.print(" (in table)...", .{})
+                else std.debug.print(" (not in table)...", .{});
+
                 if (label_table.getPtr(data.label)) |label_data| {
                     try label_data.references.append(&token.*.value);
+                    std.debug.print(" appended reference\n", .{});
                 } else {
-                    std.debug.print("created new label table data for label '{s}'\n",
-                        .{data.label}
-                    );
                     try label_table.putNoClobber(data.label, LabelData{
                         .addr = 909,
                         .references = ArrayList(*Word).init(alloc),
@@ -126,6 +135,7 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                     if (label_table.getPtr(data.label)) |label_data| {
                         try label_data.references.append(&token.*.value);
                     } else unreachable;
+                    std.debug.print(" created new label table data\n", .{});
                 }
             },
             .define_characters => @panic("define_characters not implemented"),
@@ -179,9 +189,9 @@ fn parseInstruction(line: []const u8) ?Instruction {
     if (std.ascii.isDigit(arg[0])) {
         inline for (ops_imm) |data| {
             if (mem.eql(u8, mnemonic, data.mnemonic))
-                return .{.op_label = .{
+                return .{.op_imm = .{
                     .op = data.op,
-                    .arg = try lib.parseInt(arg),
+                    .arg = lib.parseInt(u16, arg) catch return null,
                 }};
         }
     } else {
@@ -206,7 +216,14 @@ const ops_noarg = [_]struct{op: Operation.Op, mnemonic: []const u8} {
     .{.op = .pop, .mnemonic = "pop"},
 };
 
-const ops_imm = [_]struct{op: Operation.Op, mnemonic: []const u8} {};
+const ops_imm = [_]struct{op: Operation.Op, mnemonic: []const u8} {
+    .{.op = .ld_imm, .mnemonic = "ld"},
+    .{.op = .add_imm, .mnemonic = "add"},
+    .{.op = .sub_imm, .mnemonic = "sub"},
+    .{.op = .mul_imm, .mnemonic = "mul"},
+    .{.op = .div_imm, .mnemonic = "div"},
+    .{.op = .ldparam_no, .mnemonic = "ldparam"},
+};
 
 const ops_label = [_]struct{op: Operation.Op, mnemonic: []const u8} {
     .{.op = .ld_from, .mnemonic = "ld"},
