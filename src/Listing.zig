@@ -15,6 +15,7 @@ pub const ReadError =
 /// caller owns returned memory
 pub fn read(in: Reader, alloc: Allocator) ReadError!Listing {
     var tokens = ArrayList(Token).init(alloc);
+    errdefer tokens.deinit();
 
     while (try nextToken(in)) |token| try tokens.append(token);
 
