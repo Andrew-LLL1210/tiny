@@ -23,7 +23,7 @@ pub fn main() !void {
     var args_it = try std.process.argsWithAllocator(std.heap.page_allocator);
     defer args_it.deinit();
 
-    _ = args_it.skip();
+    _ = args_it.skip(); // executable name
     const filename = args_it.next() orelse return (stderr.writeAll(usage));
 
     var file = try std.fs.cwd().openFile(filename, .{});
