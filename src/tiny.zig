@@ -18,14 +18,18 @@ pub const readListing = @import("listing.zig").read;
 pub const writeListing = @import("listing.zig").write;
 
 const LabelData = struct {
-    addr: u16,
+    addr: ?u16,
     references: ArrayList(*Word),
 
-    fn init(addr: u16, alloc: Allocator) LabelData {
+    fn init(addr: ?u16, alloc: Allocator) LabelData {
         return .{
             .addr = addr,
             .references = ArrayList(*Word).init(alloc),
         };
+    }
+
+    fn initNull(alloc: Allocator) LabelData {
+        return init(null, alloc);
     }
 };
 
@@ -82,24 +86,20 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
         const line = mem.trimRight(u8, rline, "\r\n");
 
         // remove comment
-        const noncomment = if (mem.indexOf(u8, line, ";")) |ix|
-            line[0..ix]
-        else
-            line;
+        const noncomment = if (mem.indexOf(u8, line, ";")) |ix| line[0..ix]
+        else line;
 
         // separate label if exists
         const src = if (mem.indexOf(u8, noncomment, ":")) |ix| lbl: {
             const label_name = mem.trim(u8, noncomment[0..ix], " \t");
             // TODO: check if label name is valid
 
-            // put label address in label_table
-            // TODO: detect duplicate labels
+            // put label address in label_table if not duplicate
             const addr = @truncate(u16, listing.items.len);
-            if (label_table.getPtr(label_name)) |label_data| {
-                label_data.addr = addr;
-            } else {
-                try label_table.putNoClobber(label_name, LabelData.init(addr, alloc));
-            }
+            const kv = try label_table.getOrPut(label_name);
+            if (kv.found_existing and kv.value_ptr.addr != null) return error.DuplicateLabel;
+            if (!kv.found_existing) kv.value_ptr.* = LabelData.init(addr, alloc);
+            else kv.value_ptr.addr = addr;
 
             break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
         } else mem.trim(u8, noncomment, " \t");
@@ -114,26 +114,16 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                 token.* = (Operation{ .op = data.op, .arg = 0 }).encode();
 
                 // add to references list
-                if (label_table.getPtr(data.label)) |label_data| {
-                    try label_data.references.append(&token.*.?);
-                } else {
-                    try label_table.putNoClobber(data.label, LabelData{
-                        .addr = 909,
-                        .references = ArrayList(*Word).init(alloc),
-                    });
-                    if (label_table.getPtr(data.label)) |label_data| {
-                        try label_data.references.append(&token.*.?);
-                    } else unreachable;
-                }
+                const kv = try label_table.getOrPut(data.label);
+                if (!kv.found_existing) kv.value_ptr.* = LabelData.initNull(alloc);
+                try kv.value_ptr.references.append(&token.*.?);
             },
             .define_characters => |string| {
-                for (string) |char| try listing.append(char);
+                try listing.appendSlice(string);
                 try listing.append(0);
             },
             .define_byte => |word| try listing.append(word),
-            .define_storage => |size| {
-                try listing.appendNTimes(null, size);
-            },
+            .define_storage => |size| try listing.appendNTimes(null, size),
         } else {
             std.debug.print("invalid instruction: \"{s}\"\n", .{src});
             return error.InvalidSourceInstruction;
