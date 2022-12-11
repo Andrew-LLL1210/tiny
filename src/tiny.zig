@@ -98,7 +98,7 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
             const addr = @truncate(u16, listing.items.len);
             const kv = try label_table.getOrPut(label_name);
             if (kv.found_existing and kv.value_ptr.addr != null) return error.DuplicateLabel;
-            if (!kv.found_existing) kv.value_ptr.* = LabelData.init(addr, alloc);
+            if (!kv.found_existing) kv.value_ptr.* = LabelData.init(addr, alloc)
             else kv.value_ptr.addr = addr;
 
             break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
@@ -119,7 +119,7 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                 try kv.value_ptr.references.append(&token.*.?);
             },
             .define_characters => |string| {
-                try listing.appendSlice(string);
+                for (string) |char| try listing.append(char);
                 try listing.append(0);
             },
             .define_byte => |word| try listing.append(word),
@@ -133,9 +133,11 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
     // reify labels
     var it = label_table.iterator();
     while (it.next()) |entry| {
+        if (entry.value_ptr.addr == null) return error.UnknownLabel;
+
         const label_data = entry.value_ptr.*;
         for (label_data.references.items) |word_ptr|
-            word_ptr.* += label_data.addr;
+            word_ptr.* += label_data.addr.?;
     }
 
     return listing.toOwnedSlice();
