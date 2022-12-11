@@ -1,4 +1,5 @@
 const std = @import("std");
+const lib = @import("lib");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
@@ -40,7 +41,7 @@ pub fn write(listing: Listing, out: Writer) !void {
 }
 
 
-const Token = union(enum) {
+pub const Token = union(enum) {
     addr: u16,
     value: u24,
 };
@@ -53,7 +54,7 @@ fn nextToken(src: Reader) !?Token {
                 try src.readByte(),
                 try src.readByte(),
             };
-            return Token{ .addr = parseInt(u16, &digits) };
+            return Token{ .addr = try lib.parseInt(u16, &digits) };
         },
         '0'...'9' => |digit| {
             const digits: [5]u8 = .{
@@ -63,7 +64,7 @@ fn nextToken(src: Reader) !?Token {
                 try src.readByte(),
                 try src.readByte(),
             };
-            return Token{ .value = parseInt(u24, &digits) };
+            return Token{ .value = try lib.parseInt(u24, &digits) };
         },
         ' ', '\n', '\t', '\r' => {},
         else => return ReadError.BadByte,
@@ -71,10 +72,4 @@ fn nextToken(src: Reader) !?Token {
         error.EndOfStream => return null,
         else => return err,
     }
-}
-
-fn parseInt(comptime T: type, src: []const u8) T {
-    var acc: T = 0;
-    for (src) |digit| acc = acc * 10 + digit - '0';
-    return acc;
 }

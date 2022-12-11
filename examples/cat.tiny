@@ -1,0 +1,7 @@
+lda str
+call inputString
+lda str
+call printString
+stop
+
+str:

@@ -30,8 +30,11 @@ pub fn main() !void {
     defer file.close();
     const fin = file.reader();
 
-    const listing = try tiny.readListing(fin, std.heap.page_allocator);
+    const listing = try tiny.readSource(fin, std.heap.page_allocator);
     defer std.heap.page_allocator.free(listing);
+
+    std.debug.print("listing has len {d}", .{listing.len});
+    try tiny.writeListing(listing, stderr);
 
     var machine = Machine.init(stdin, stdout, stderr);
     machine.loadListing(listing);

@@ -1,0 +1,12 @@
+ld label
+ld label
+label: call printInteger
+label: call printInteger
+call inputInteger
+call printInteger
+st label
+call printInteger
+ld label
+ld label
+call printInteger
+stop
