@@ -87,7 +87,8 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
         // remove comment
         const noncomment = if (mem.indexOf(u8, line, ";")) |ix|
             line[0..ix]
-        else line;
+        else
+            line;
 
         // separate label if exists
         const src = if (mem.indexOf(u8, noncomment, ":")) |ix| lbl: {
@@ -96,47 +97,32 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
 
             // put label address in label_table
             // TODO: detect duplicate labels
-            std.debug.print("label '{s}'...", .{label_name});
-            if (label_table.contains(label_name))
-                std.debug.print(" (in table)...", .{})
-            else std.debug.print(" (not in table)...", .{});
-
             if (label_table.getPtr(label_name)) |label_data| {
                 label_data.addr = cur_addr;
-                std.debug.print(" updated address\n", .{});
             } else {
                 try label_table.putNoClobber(label_name, LabelData.init(cur_addr, alloc));
-                std.debug.print(" created new label table data\n", .{});
             }
 
-            break :lbl mem.trim(u8, noncomment[ix+1..], " \t");
+            break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
         } else mem.trim(u8, noncomment, " \t");
 
         if (src.len == 0) continue;
         cur_addr += 1;
 
         if (parseInstruction(src)) |inst| switch (inst) {
-            .op_noarg => |op|
-                try listing.append(Token{
-                    .value = (Operation{.op = op, .arg = 0}).encode()
-                }),
-            .op_imm => |operation|
-                try listing.append(Token{.value = operation.encode()}),
+            .op_noarg => |op| try listing.append(Token{
+                .value = (Operation{ .op = op, .arg = 0 }).encode(),
+            }),
+            .op_imm => |operation| try listing.append(Token{ .value = operation.encode() }),
             .op_label => |data| {
                 const token = try listing.addOne();
                 token.* = Token{
-                    .value = (Operation{.op = data.op, .arg = 0}).encode(),
+                    .value = (Operation{ .op = data.op, .arg = 0 }).encode(),
                 };
 
                 // add to references list
-                std.debug.print("referenced '{s}'...", .{data.label});
-                if (label_table.contains(data.label))
-                    std.debug.print(" (in table)...", .{})
-                else std.debug.print(" (not in table)...", .{});
-
                 if (label_table.getPtr(data.label)) |label_data| {
                     try label_data.references.append(&token.*.value);
-                    std.debug.print(" appended reference\n", .{});
                 } else {
                     try label_table.putNoClobber(data.label, LabelData{
                         .addr = 909,
@@ -145,21 +131,20 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
                     if (label_table.getPtr(data.label)) |label_data| {
                         try label_data.references.append(&token.*.value);
                     } else unreachable;
-                    std.debug.print(" created new label table data\n", .{});
                 }
             },
             .define_characters => |string| {
                 cur_addr += @truncate(u16, string.len);
-                for (string) |char| try listing.append(.{.value = char});
-                try listing.append(.{.value = 0});
+                for (string) |char| try listing.append(.{ .value = char });
+                try listing.append(.{ .value = 0 });
             },
-            .define_byte => |word| try listing.append(.{.value = word}),
+            .define_byte => |word| try listing.append(.{ .value = word }),
             .define_storage => |size| {
                 cur_addr += size - 1;
-                try listing.append(.{.addr = cur_addr + size - 1});
+                try listing.append(.{ .addr = cur_addr + size - 1 });
             },
         } else {
-            std.debug.print("\"{s}\"\n", .{src});
+            std.debug.print("invalid instruction: \"{s}\"\n", .{src});
             return error.InvalidSourceInstruction;
         }
     }
@@ -192,12 +177,11 @@ const Instruction = union(enum) {
 };
 
 fn parseInstruction(line: []const u8) ?Instruction {
-    
     inline for (ops_noarg) |data| {
         if (eqlIgnoreCase(line, data.mnemonic))
-            return .{.op_noarg = data.op};
+            return .{ .op_noarg = data.op };
     }
-    
+
     var it = mem.tokenize(u8, line, " ");
     const mnemonic = it.next() orelse unreachable;
 
@@ -208,80 +192,80 @@ fn parseInstruction(line: []const u8) ?Instruction {
         if (str[0] != '"') return null;
         if (str[str.len - 1] != '"') return null;
 
-        const innerstr = str[1..str.len - 1];
+        const innerstr = str[1 .. str.len - 1];
         // assume this is okay for now
-        return .{.define_characters = innerstr};
+        return .{ .define_characters = innerstr };
     }
-    
+
     const arg = it.next() orelse return null;
     if (it.next()) |_| return null;
 
     if (std.ascii.isDigit(arg[0])) {
         inline for (ops_imm) |data| {
             if (eqlIgnoreCase(mnemonic, data.mnemonic))
-                return .{.op_imm = .{
+                return .{ .op_imm = .{
                     .op = data.op,
                     .arg = lib.parseInt(u16, arg) catch return null,
-                }};
+                } };
         }
     } else {
         inline for (ops_label) |data| {
             if (eqlIgnoreCase(mnemonic, data.mnemonic))
-                return .{.op_label = .{
+                return .{ .op_label = .{
                     .op = data.op,
                     .label = arg,
-                }};
+                } };
         }
     }
 
     if (eqlIgnoreCase(mnemonic, "db")) {
-        return .{.define_byte = lib.parseInt(Word, arg) catch return null};
+        return .{ .define_byte = lib.parseInt(Word, arg) catch return null };
     }
 
     if (eqlIgnoreCase(mnemonic, "ds")) {
-        return .{.define_storage = lib.parseInt(u16, arg) catch return null};
+        return .{ .define_storage = lib.parseInt(u16, arg) catch return null };
     }
 
     return null;
 }
 
-const ops_noarg = [_]struct{op: Operation.Op, mnemonic: []const u8} {
-    .{.op = .stop, .mnemonic = "stop"},
-    .{.op = .in, .mnemonic = "in"},
-    .{.op = .out, .mnemonic = "out"},
-    .{.op = .ret, .mnemonic = "ret"},
-    .{.op = .push, .mnemonic = "push"},
-    .{.op = .pop, .mnemonic = "pop"},
+const ops_noarg = [_]struct { op: Operation.Op, mnemonic: []const u8 }{
+    .{ .op = .stop, .mnemonic = "stop" },
+    .{ .op = .in, .mnemonic = "in" },
+    .{ .op = .out, .mnemonic = "out" },
+    .{ .op = .ret, .mnemonic = "ret" },
+    .{ .op = .push, .mnemonic = "push" },
+    .{ .op = .pop, .mnemonic = "pop" },
 };
 
-const ops_imm = [_]struct{op: Operation.Op, mnemonic: []const u8} {
-    .{.op = .ld_imm, .mnemonic = "ld"},
-    .{.op = .add_imm, .mnemonic = "add"},
-    .{.op = .sub_imm, .mnemonic = "sub"},
-    .{.op = .mul_imm, .mnemonic = "mul"},
-    .{.op = .div_imm, .mnemonic = "div"},
-    .{.op = .ldparam_no, .mnemonic = "ldparam"},
+const ops_imm = [_]struct { op: Operation.Op, mnemonic: []const u8 }{
+    .{ .op = .ld_imm, .mnemonic = "ld" },
+    .{ .op = .add_imm, .mnemonic = "add" },
+    .{ .op = .sub_imm, .mnemonic = "sub" },
+    .{ .op = .mul_imm, .mnemonic = "mul" },
+    .{ .op = .div_imm, .mnemonic = "div" },
+    .{ .op = .ldparam_no, .mnemonic = "ldparam" },
 };
 
-const ops_label = [_]struct{op: Operation.Op, mnemonic: []const u8} {
-    .{.op = .ld_from, .mnemonic = "ld"},
-    .{.op = .ldi_from, .mnemonic = "ldi"},
-    .{.op = .lda_of, .mnemonic = "lda"},
-    .{.op = .st_to, .mnemonic = "st"},
-    .{.op = .sti_to, .mnemonic = "sti"},
-    .{.op = .add_by, .mnemonic = "add"},
-    .{.op = .sub_by, .mnemonic = "sub"},
-    .{.op = .mul_by, .mnemonic = "mul"},
-    .{.op = .div_by, .mnemonic = "div"},
-    .{.op = .jmp_to, .mnemonic = "jmp"},
-    .{.op = .je_to, .mnemonic = "je"},
-    .{.op = .jne_to, .mnemonic = "jne"},
-    .{.op = .jg_to, .mnemonic = "jg"},
-    .{.op = .jge_to, .mnemonic = "jge"},
-    .{.op = .jl_to, .mnemonic = "jl"},
-    .{.op = .jle_to, .mnemonic = "jle"},
-    .{.op = .call, .mnemonic = "call"},
-    .{.op = .push_from, .mnemonic = "push"},
-    .{.op = .pop_to, .mnemonic = "pop"},
-    .{.op = .pusha_of, .mnemonic = "pusha"},
+const ops_label = [_]struct { op: Operation.Op, mnemonic: []const u8 }{
+    .{ .op = .ld_from, .mnemonic = "ld" },
+    .{ .op = .ldi_from, .mnemonic = "ldi" },
+    .{ .op = .lda_of, .mnemonic = "lda" },
+    .{ .op = .st_to, .mnemonic = "st" },
+    .{ .op = .sti_to, .mnemonic = "sti" },
+    .{ .op = .add_by, .mnemonic = "add" },
+    .{ .op = .sub_by, .mnemonic = "sub" },
+    .{ .op = .mul_by, .mnemonic = "mul" },
+    .{ .op = .div_by, .mnemonic = "div" },
+    .{ .op = .jmp_to, .mnemonic = "jmp" },
+    .{ .op = .je_to, .mnemonic = "je" },
+    .{ .op = .jne_to, .mnemonic = "jne" },
+    .{ .op = .jg_to, .mnemonic = "jg" },
+    .{ .op = .jge_to, .mnemonic = "jge" },
+    .{ .op = .jl_to, .mnemonic = "jl" },
+    .{ .op = .jle_to, .mnemonic = "jle" },
+    .{ .op = .call, .mnemonic = "call" },
+    .{ .op = .push_from, .mnemonic = "push" },
+    .{ .op = .pop_to, .mnemonic = "pop" },
+    .{ .op = .pusha_of, .mnemonic = "pusha" },
 };

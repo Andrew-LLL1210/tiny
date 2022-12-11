@@ -27,14 +27,11 @@ pub fn main() !void {
     const filename = args_it.next() orelse return (stderr.writeAll(usage));
 
     var file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
     const fin = file.reader();
+    defer file.close();
 
     const listing = try tiny.readSource(fin, std.heap.page_allocator);
     defer std.heap.page_allocator.free(listing);
-
-    std.debug.print("listing has len {d}", .{listing.len});
-    try tiny.writeListing(listing, stderr);
 
     var machine = Machine.init(stdin, stdout, stderr);
     machine.loadListing(listing);
