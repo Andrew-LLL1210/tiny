@@ -14,36 +14,180 @@ const Ptr = Machine.Ptr;
 const Listing = Machine.Listing;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 
-pub const TinyErrorReporter = struct {
+pub const Reporter = struct {
     line_no: usize = 0,
     filepath: []const u8,
     writer: Writer,
 
+    const ReportType = enum {
+        err,
+        note,
+    };
+
     pub fn report(
-        self: TinyErrorReporter,
+        self: Reporter,
+        line_no: ?usize,
         comptime fmt: []const u8,
         args: anytype,
     ) !void {
         try self.writer.print(
-            "\x1b[1m{s}:{d}: \x1b[31merror:\x1b[39m " ++ fmt ++ "\x1b[0m\n",
-            .{ self.filepath, self.line_no } ++ args,
+            "\x1b[97m{s}:{d}: \x1b[91merror:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
+            .{ self.filepath, line_no orelse self.line_no } ++ args,
         );
+    }
+
+    pub fn note(
+        self: Reporter,
+        line_no: ?usize,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) !void {
+        try self.writer.print(
+            "\x1b[97m{s}:{d}: \x1b[96mnote:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
+            .{ self.filepath, line_no orelse self.line_no } ++ args,
+        );
+    }
+
+    pub fn reportDuplicateLabel(self: Reporter, label_name: []const u8, line_no: usize, is_rom: bool,) !void {
+        try self.report(null, "duplicate label '{s}'", .{label_name});
+        if (is_rom)
+            try self.note(null, "'{s}' is reserved", .{canonicalName(label_name).?})
+        else try self.note(line_no, "original label here", .{});
+    }
+
+    pub fn canonicalName(label_name: []const u8) ?[]const u8 {
+        inline for (.{"printInteger", "printString", "inputInteger", "inputString",}) |name|
+            if (eqlIgnoreCase(label_name, name)) return name;
+        return null;
     }
 };
 
+
+const AssemblyError = error {
+    DuplicateLabel,
+    UnknownLabel,
+    InvalidSourceInstruction,
+};
+
+/// read tiny source code and produce a listing
+pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
+    // eventual return value
+    var listing = ArrayList(?Word).init(alloc);
+    errdefer listing.deinit();
+
+    // TODO: use a custom ctx that performs case-insensitive comparisons
+    var label_table = HashMap.init(alloc);
+    defer label_table.deinit();
+    defer {
+        var it = label_table.valueIterator();
+        while (it.next()) |label_data|
+            label_data.references.deinit();
+    }
+
+    // put the builtins in the label_table
+    inline for (.{"printInteger", "printString", "inputInteger", "inputString",}) |name, i|
+        try label_table.putNoClobber(name, LabelData.initRom(name, i, alloc));
+
+    // holds the lines because we need them to last
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    const line_alloc = arena.allocator();
+    defer arena.deinit();
+
+    // get a line
+    while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
+        reporter.line_no += 1;
+        const line = mem.trimRight(u8, rline, "\r\n");
+
+        // remove comment
+        const noncomment =
+        if (mem.indexOf(u8, line, ";")) |ix| line[0..ix] else line;
+
+        // separate label if exists
+        const src = if (mem.indexOf(u8, noncomment, ":")) |ix| lbl: {
+            const label_name = mem.trim(u8, noncomment[0..ix], " \t");
+            // TODO: check if label name is valid
+
+            // put label address in label_table if not duplicate
+            const addr = @truncate(u16, listing.items.len);
+            const kv = try label_table.getOrPut(label_name);
+            if (kv.found_existing and kv.value_ptr.addr != null) {
+                try reporter.reportDuplicateLabel(label_name, kv.value_ptr.line_no, kv.value_ptr.addr orelse 0 >= 900);
+                return error.DuplicateLabel;
+            }
+            if (!kv.found_existing)
+                kv.value_ptr.* = LabelData.init(label_name, reporter.line_no, addr, alloc)
+            else {
+                kv.value_ptr.addr = addr;
+                kv.value_ptr.line_no = reporter.line_no;
+            }
+
+            break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
+        } else mem.trim(u8, noncomment, " \t");
+
+        if (src.len == 0) continue;
+
+        if (parseInstruction(src)) |inst| switch (inst) {
+            .op_noarg => |op| try listing.append((Operation{ .op = op, .arg = 0 }).encode()),
+            .op_imm => |operation| try listing.append(operation.encode()),
+            .op_label => |data| {
+                const token = try listing.addOne();
+                token.* = (Operation{ .op = data.op, .arg = 0 }).encode();
+
+                // add to references list
+                const kv = try label_table.getOrPut(data.label);
+                if (!kv.found_existing)
+                    kv.value_ptr.* = LabelData.initNull(data.label, reporter.line_no, alloc);
+                try kv.value_ptr.references.append(&token.*.?);
+            },
+            .define_characters => |string| {
+                for (string) |char| try listing.append(char);
+                try listing.append(0);
+            },
+            .define_byte => |word| try listing.append(word),
+            .define_storage => |size| try listing.appendNTimes(null, size),
+        } else {
+            try reporter.report(null, "invalid instruction: \'{s}\'", .{src});
+            return error.InvalidSourceInstruction;
+        }
+    }
+
+    // reify labels
+    var it = label_table.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.addr == null) {
+            try reporter.report(entry.value_ptr.line_no, "Unknown Label '{s}'", .{entry.value_ptr.name},);
+            return error.UnknownLabel;
+        }
+
+        const label_data = entry.value_ptr.*;
+        for (label_data.references.items) |word_ptr|
+            word_ptr.* += label_data.addr.?;
+    }
+
+    return listing.toOwnedSlice();
+}
+
 const LabelData = struct {
+    name: []const u8,
+    line_no: usize,
     addr: ?u16,
     references: ArrayList(*Word),
 
-    fn init(addr: ?u16, alloc: Allocator) LabelData {
+    fn init(name: []const u8, line_no: usize, addr: ?u16, alloc: Allocator,) LabelData {
         return .{
+            .name = name,
+            .line_no = line_no,
             .addr = addr,
             .references = ArrayList(*Word).init(alloc),
         };
     }
 
-    fn initNull(alloc: Allocator) LabelData {
-        return init(null, alloc);
+    fn initNull(name: []const u8, line_no:usize, alloc: Allocator) LabelData {
+        return init(name, line_no, null, alloc);
+    }
+
+    fn initRom(name: []const u8, i: usize, alloc: Allocator) LabelData {
+        return init(name, 0, @truncate(Ptr, 900 + 25 * i), alloc);
     }
 };
 
@@ -66,96 +210,6 @@ const HashMap = std.HashMap([]const u8, LabelData, struct {
         return eqlIgnoreCase(a, b);
     }
 }, 80);
-
-/// read tiny source code and produce a listing
-pub fn readSource(in: Reader, alloc: Allocator, reporter: *TinyErrorReporter) !Listing {
-    // eventual return value
-    var listing = ArrayList(?Word).init(alloc);
-    errdefer listing.deinit();
-
-    // TODO: use a custom ctx that performs case-insensitive comparisons
-    var label_table = HashMap.init(alloc);
-    defer label_table.deinit();
-    defer {
-        var it = label_table.valueIterator();
-        while (it.next()) |label_data|
-            label_data.references.deinit();
-    }
-
-    // put the builtins in the label_table
-    try label_table.putNoClobber("printInteger", LabelData.init(900, alloc));
-    try label_table.putNoClobber("printString", LabelData.init(925, alloc));
-    try label_table.putNoClobber("inputInteger", LabelData.init(950, alloc));
-    try label_table.putNoClobber("inputString", LabelData.init(975, alloc));
-
-    // holds the lines because we need them to last
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    const line_alloc = arena.allocator();
-    defer arena.deinit();
-
-    // get a line
-    while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
-        reporter.line_no += 1;
-        const line = mem.trimRight(u8, rline, "\r\n");
-
-        // remove comment
-        const noncomment = if (mem.indexOf(u8, line, ";")) |ix| line[0..ix] else line;
-
-        // separate label if exists
-        const src = if (mem.indexOf(u8, noncomment, ":")) |ix| lbl: {
-            const label_name = mem.trim(u8, noncomment[0..ix], " \t");
-            // TODO: check if label name is valid
-
-            // put label address in label_table if not duplicate
-            const addr = @truncate(u16, listing.items.len);
-            const kv = try label_table.getOrPut(label_name);
-            if (kv.found_existing and kv.value_ptr.addr != null) {
-                try reporter.report("duplicate label '{s}'", .{label_name});
-                return error.DuplicateLabel;
-            }
-            if (!kv.found_existing) kv.value_ptr.* = LabelData.init(addr, alloc) else kv.value_ptr.addr = addr;
-
-            break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
-        } else mem.trim(u8, noncomment, " \t");
-
-        if (src.len == 0) continue;
-
-        if (parseInstruction(src)) |inst| switch (inst) {
-            .op_noarg => |op| try listing.append((Operation{ .op = op, .arg = 0 }).encode()),
-            .op_imm => |operation| try listing.append(operation.encode()),
-            .op_label => |data| {
-                const token = try listing.addOne();
-                token.* = (Operation{ .op = data.op, .arg = 0 }).encode();
-
-                // add to references list
-                const kv = try label_table.getOrPut(data.label);
-                if (!kv.found_existing) kv.value_ptr.* = LabelData.initNull(alloc);
-                try kv.value_ptr.references.append(&token.*.?);
-            },
-            .define_characters => |string| {
-                for (string) |char| try listing.append(char);
-                try listing.append(0);
-            },
-            .define_byte => |word| try listing.append(word),
-            .define_storage => |size| try listing.appendNTimes(null, size),
-        } else {
-            try reporter.report("invalid instruction: \'{s}\'", .{src});
-            return error.InvalidSourceInstruction;
-        }
-    }
-
-    // reify labels
-    var it = label_table.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.addr == null) return error.UnknownLabel;
-
-        const label_data = entry.value_ptr.*;
-        for (label_data.references.items) |word_ptr|
-            word_ptr.* += label_data.addr.?;
-    }
-
-    return listing.toOwnedSlice();
-}
 
 const Instruction = union(enum) {
     op_noarg: Operation.Op,

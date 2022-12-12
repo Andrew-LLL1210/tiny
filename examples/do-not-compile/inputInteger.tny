@@ -1,0 +1,4 @@
+call INPUTINTEGER
+stop
+INPUTINTEGER:
+ret

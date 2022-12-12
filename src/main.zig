@@ -25,17 +25,27 @@ pub fn main() !void {
 
     _ = args_it.skip(); // executable name
     const filename = args_it.next() orelse return (stderr.writeAll(usage));
-    const filepath = try std.fs.realpathAlloc(std.heap.page_allocator, filename);
+    const filepath = std.fs.realpathAlloc(std.heap.page_allocator, filename)
+    catch |err| switch (err) {
+        error.FileNotFound =>
+            return stderr.print(
+                "\x1b[1;31merror:\x1b[39m FileNotFound:\x1b[0m '{s}'", .{filename},),
+        else => return err,
+    };
     defer std.heap.page_allocator.free(filepath);
+
+    var reporter = tiny.Reporter {
+        .filepath = filepath,
+        .writer = stderr,
+    };
 
     var file = try std.fs.openFileAbsolute(filepath, .{});
     const fin = file.reader();
     defer file.close();
 
-    const listing = tiny.readSource(fin, std.heap.page_allocator, &.{
-        .filepath = filepath,
-        .writer = stderr,
-    }) catch |err| switch (err) {
+    const listing = tiny.readSource(fin, std.heap.page_allocator, &reporter)
+    catch |err| switch (err) {
+        error.UnknownLabel,
         error.DuplicateLabel => return,
         else => return err,
     };
