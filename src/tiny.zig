@@ -14,64 +14,68 @@ const Ptr = Machine.Ptr;
 const Listing = Machine.Listing;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 
-pub const Reporter = struct {
-    line_no: usize = 0,
-    filepath: []const u8,
-    writer: Writer,
+pub fn Reporter(comptime WriterT: type) type {
+    return struct {
+        const Self = @This();
 
-    const ReportType = enum {
-        err,
-        note,
+        line_no: usize = 0,
+        filepath: []const u8,
+        writer: WriterT,
+
+        const ReportType = enum {
+            err,
+            note,
+        };
+
+        pub fn report(
+            self: Self,
+            line_no: ?usize,
+            comptime fmt: []const u8,
+            args: anytype,
+        ) !void {
+            try self.writer.print(
+                "\x1b[97m{s}:{d}: \x1b[91merror:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
+                .{ self.filepath, line_no orelse self.line_no } ++ args,
+            );
+        }
+
+        pub fn note(
+            self: Self,
+            line_no: ?usize,
+            comptime fmt: []const u8,
+            args: anytype,
+        ) !void {
+            try self.writer.print(
+                "\x1b[97m{s}:{d}: \x1b[96mnote:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
+                .{ self.filepath, line_no orelse self.line_no } ++ args,
+            );
+        }
+
+        pub fn reportDuplicateLabel(
+            self: Self,
+            label_name: []const u8,
+            line_no: usize,
+            is_rom: bool,
+        ) !void {
+            try self.report(null, "duplicate label '{s}'", .{label_name});
+            if (is_rom)
+                try self.note(null, "'{s}' is reserved", .{canonicalName(label_name).?})
+            else
+                try self.note(line_no, "original label here", .{});
+        }
+
+        pub fn canonicalName(label_name: []const u8) ?[]const u8 {
+            inline for (.{
+                "printInteger",
+                "printString",
+                "inputInteger",
+                "inputString",
+            }) |name|
+                if (eqlIgnoreCase(label_name, name)) return name;
+            return null;
+        }
     };
-
-    pub fn report(
-        self: Reporter,
-        line_no: ?usize,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) !void {
-        try self.writer.print(
-            "\x1b[97m{s}:{d}: \x1b[91merror:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
-            .{ self.filepath, line_no orelse self.line_no } ++ args,
-        );
-    }
-
-    pub fn note(
-        self: Reporter,
-        line_no: ?usize,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) !void {
-        try self.writer.print(
-            "\x1b[97m{s}:{d}: \x1b[96mnote:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
-            .{ self.filepath, line_no orelse self.line_no } ++ args,
-        );
-    }
-
-    pub fn reportDuplicateLabel(
-        self: Reporter,
-        label_name: []const u8,
-        line_no: usize,
-        is_rom: bool,
-    ) !void {
-        try self.report(null, "duplicate label '{s}'", .{label_name});
-        if (is_rom)
-            try self.note(null, "'{s}' is reserved", .{canonicalName(label_name).?})
-        else
-            try self.note(line_no, "original label here", .{});
-    }
-
-    pub fn canonicalName(label_name: []const u8) ?[]const u8 {
-        inline for (.{
-            "printInteger",
-            "printString",
-            "inputInteger",
-            "inputString",
-        }) |name|
-            if (eqlIgnoreCase(label_name, name)) return name;
-        return null;
-    }
-};
+}
 
 const AssemblyError = error{
     DuplicateLabel,
@@ -80,7 +84,7 @@ const AssemblyError = error{
 };
 
 /// read tiny source code and produce a listing
-pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
+pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
@@ -199,6 +203,7 @@ pub fn separateParts(line: []const u8) Parts {
         .string => switch (char) {
             '"' => state = .not_string,
             '\\' => state = .escape,
+            else => {},
         },
         .escape => state = .string,
     };
