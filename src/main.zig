@@ -25,12 +25,20 @@ pub fn main() !void {
 
     _ = args_it.skip(); // executable name
     const filename = args_it.next() orelse return (stderr.writeAll(usage));
+    const filepath = try std.fs.realpathAlloc(std.heap.page_allocator, filename);
+    defer std.heap.page_allocator.free(filepath);
 
-    var file = try std.fs.cwd().openFile(filename, .{});
+    var file = try std.fs.openFileAbsolute(filepath, .{});
     const fin = file.reader();
     defer file.close();
 
-    const listing = try tiny.readSource(fin, std.heap.page_allocator);
+    const listing = tiny.readSource(fin, std.heap.page_allocator, &.{
+        .filepath = filepath,
+        .writer = stderr,
+    }) catch |err| switch (err) {
+        error.DuplicateLabel => return,
+        else => return err,
+    };
     defer std.heap.page_allocator.free(listing);
 
     var machine = Machine.init(stdin, stdout, stderr);

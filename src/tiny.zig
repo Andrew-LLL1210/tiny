@@ -15,7 +15,20 @@ const Listing = Machine.Listing;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 
 pub const TinyErrorReporter = struct {
+    line_no: usize = 0,
+    filepath: []const u8,
+    writer: Writer,
 
+    pub fn report(
+        self: TinyErrorReporter,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) !void {
+        try self.writer.print(
+            "\x1b[1m{s}:{d}: \x1b[31merror:\x1b[39m " ++ fmt ++ "\x1b[0m\n",
+            .{ self.filepath, self.line_no } ++ args,
+        );
+    }
 };
 
 const LabelData = struct {
@@ -35,9 +48,8 @@ const LabelData = struct {
 };
 
 const HashMap = std.HashMap([]const u8, LabelData, struct {
-    pub fn hash(ctx: @This(), key: []const u8) u64 {
+    pub fn hash(_: @This(), key: []const u8) u64 {
         // case insensitive hashing
-        _ = ctx;
         var wh = std.hash.Wyhash.init(0);
         for (key) |char| {
             if (ascii.isLower(char)) {
@@ -50,14 +62,13 @@ const HashMap = std.HashMap([]const u8, LabelData, struct {
         return wh.final();
     }
 
-    pub fn eql(ctx: @This(), a: []const u8, b: []const u8) bool {
-        _ = ctx;
+    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
         return eqlIgnoreCase(a, b);
     }
 }, 80);
 
 /// read tiny source code and produce a listing
-pub fn readSource(in: Reader, alloc: Allocator) !Listing {
+pub fn readSource(in: Reader, alloc: Allocator, reporter: *TinyErrorReporter) !Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
@@ -84,11 +95,11 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
 
     // get a line
     while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
+        reporter.line_no += 1;
         const line = mem.trimRight(u8, rline, "\r\n");
 
         // remove comment
-        const noncomment = if (mem.indexOf(u8, line, ";")) |ix| line[0..ix]
-        else line;
+        const noncomment = if (mem.indexOf(u8, line, ";")) |ix| line[0..ix] else line;
 
         // separate label if exists
         const src = if (mem.indexOf(u8, noncomment, ":")) |ix| lbl: {
@@ -98,9 +109,11 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
             // put label address in label_table if not duplicate
             const addr = @truncate(u16, listing.items.len);
             const kv = try label_table.getOrPut(label_name);
-            if (kv.found_existing and kv.value_ptr.addr != null) return error.DuplicateLabel;
-            if (!kv.found_existing) kv.value_ptr.* = LabelData.init(addr, alloc)
-            else kv.value_ptr.addr = addr;
+            if (kv.found_existing and kv.value_ptr.addr != null) {
+                try reporter.report("duplicate label '{s}'", .{label_name});
+                return error.DuplicateLabel;
+            }
+            if (!kv.found_existing) kv.value_ptr.* = LabelData.init(addr, alloc) else kv.value_ptr.addr = addr;
 
             break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
         } else mem.trim(u8, noncomment, " \t");
@@ -126,7 +139,7 @@ pub fn readSource(in: Reader, alloc: Allocator) !Listing {
             .define_byte => |word| try listing.append(word),
             .define_storage => |size| try listing.appendNTimes(null, size),
         } else {
-            std.debug.print("invalid instruction: \"{s}\"\n", .{src});
+            try reporter.report("invalid instruction: \'{s}\'", .{src});
             return error.InvalidSourceInstruction;
         }
     }
