@@ -7,7 +7,7 @@ const Word = u24;
 
 const tiny = @import("tiny.zig");
 const Operation = @import("Operation.zig");
-const Listing = @import("listing.zig").Listing;
+const Listing = tiny.listing;
 const Machine = @import("Machine.zig");
 
 const usage =

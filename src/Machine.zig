@@ -1,27 +1,34 @@
+const Machine = @This();
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
-const Listing = @import("listing.zig").Listing;
-
-const Machine = @This();
-
-const Word = u24;
-
-
 const Operation = @import("Operation.zig");
+
+pub const Word = u24;
+pub const Ptr = u16;
+pub const Listing = []const ?Word;
+
+pub fn writeListing(listing: Listing, out: Writer) !void {
+    for (listing) |word| if (word) |data| {
+        try out.print("{d:0>5}\n", .{data});
+    } else {
+        try out.print("?????\n", .{});
+    };
+}
 
 const print_integer = 900;
 const print_string = 925;
 const input_integer = 950;
 const input_string = 975;
 
-memory: [1000]Word,
-ip: u16,
+memory: [900]Word,
+ip: Ptr,
 acc: Word,
-sp: u16,
-bp: u16,
+sp: Ptr,
+bp: Ptr,
 
 in: Reader,
 out: Writer,
@@ -41,7 +48,7 @@ pub fn init(in: Reader, out: Writer, err: Writer) Machine {
 }
 
 pub fn loadListing(self: *Machine, listing: Listing) void {
-    for (listing) |m_w, i| if (m_w) |word| {self.memory[i] = word;};
+    for (listing) |m_word, i| if (m_word) |word| {self.memory[i] = word;};
 }
 
 const Exit = error{ Stop, SegFault };
@@ -118,19 +125,12 @@ fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void 
 
 /// consumes a WHOLE line of input from self.in and parses it as an integer
 /// throws an error if the line cannot be parsed as a (decimal) integer
-/// the TIDE implementation ignores end-of-line spaces; this does not,
-///     and will throw an error for a space character anywhere
 fn inputInteger(self: *Machine) !void {
-    var tmp: Word = 0;
-    while (self.in.readByte()) |char| switch (char) {
-        '\r' => {},
-        '\n' => {
-            self.acc = tmp;
-            return;
-        },
-        '0'...'9' => tmp = tmp * 10 + (char - '0'),
-        else => return error.InvalidInteger,
-    } else |err| return err;
+    var buf: [100]u8 = undefined;
+    const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n')
+        orelse return error.EndOfStream;
+    const line = std.mem.trim(u8, rline, " \t\r\n");
+    self.acc = try std.fmt.parseInt(Word, line, 10);
 }
 
 fn printInteger(self: *Machine) !void {

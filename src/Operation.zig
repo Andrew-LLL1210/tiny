@@ -1,12 +1,20 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const ArrayList = std.ArrayList;
-const Reader = std.fs.File.Reader;
-const Writer = std.fs.File.Writer;
-
-const Word = u24;
+const Word = @import("Machine.zig").Word;
 
 const Operation = @This();
+
+op: Op,
+arg: u16,
+
+pub fn decode(instruction: Word) Operation {
+    const op = @intToEnum(Op, instruction / 1000);
+    const arg = @truncate(u16, instruction % 1000);
+    return .{ .op = op, .arg = arg };
+}
+
+pub fn encode(input: Operation) Word {
+    return 1000 * @intCast(Word, @enumToInt(input.op)) + input.arg;
+}
 
 pub const Op = enum(u8) {
     stop = 0,
@@ -42,36 +50,3 @@ pub const Op = enum(u8) {
     mul_imm = 98,
     div_imm = 99,
 };
-
-op: Op,
-arg: u16,
-
-pub fn decodeSlice(input: []const Word, alloc: Allocator) ![]const Operation {
-    var list = ArrayList(Operation).init(alloc);
-    for (input) |instruction| {
-        const op = @intToEnum(Op, instruction / 1000);
-        const arg = @truncate(u16, instruction % 1000);
-        try list.append(.{ .op = op, .arg = arg });
-    }
-    return list.toOwnedSlice();
-}
-
-pub fn decode(instruction: Word) Operation {
-    const op = @intToEnum(Op, instruction / 1000);
-    const arg = @truncate(u16, instruction % 1000);
-    return .{ .op = op, .arg = arg };
-}
-
-pub fn encode(input: Operation) Word {
-    return 1000 * @intCast(Word, @enumToInt(input.op)) + input.arg;
-}
-
-test "decode" {
-    const input = [_]Word{ 91003, 98003 };
-    const decoded = try Operation.decodeSlice(&input, std.testing.allocator);
-    defer std.testing.allocator.free(decoded);
-    try std.testing.expectEqualSlices(Operation, &[_]Operation{
-        .{ .op = .ld_imm, .arg = 3 },
-        .{ .op = .mul_imm, .arg = 3 },
-    }, decoded);
-}

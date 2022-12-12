@@ -1,21 +1,22 @@
 //! This file contains functions for turning source code into a Listing
 
 const std = @import("std");
-const lib = @import("lib.zig");
 const mem = std.mem;
 const ascii = std.ascii;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
-const Listing = @import("listing.zig").Listing;
 const Operation = @import("Operation.zig");
-const Word = u24;
+const Machine = @import("Machine.zig");
+const Word = Machine.Word;
+const Ptr = Machine.Ptr;
+const Listing = Machine.Listing;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 
-// re-exports
-pub const readListing = @import("listing.zig").read;
-pub const writeListing = @import("listing.zig").write;
+pub const TinyErrorReporter = struct {
+
+};
 
 const LabelData = struct {
     addr: ?u16,
@@ -184,7 +185,7 @@ fn parseInstruction(line: []const u8) ?Instruction {
             if (eqlIgnoreCase(mnemonic, data.mnemonic))
                 return .{ .op_imm = .{
                     .op = data.op,
-                    .arg = lib.parseInt(u16, arg) catch return null,
+                    .arg = std.fmt.parseInt(u16, arg, 10) catch return null,
                 } };
         }
     } else {
@@ -198,11 +199,11 @@ fn parseInstruction(line: []const u8) ?Instruction {
     }
 
     if (eqlIgnoreCase(mnemonic, "db")) {
-        return .{ .define_byte = lib.parseInt(Word, arg) catch return null };
+        return .{ .define_byte = std.fmt.parseInt(Word, arg, 10) catch return null };
     }
 
     if (eqlIgnoreCase(mnemonic, "ds")) {
-        return .{ .define_storage = lib.parseInt(u16, arg) catch return null };
+        return .{ .define_storage = std.fmt.parseInt(u16, arg, 10) catch return null };
     }
 
     return null;
