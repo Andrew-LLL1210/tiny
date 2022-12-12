@@ -165,7 +165,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
         if (entry.value_ptr.addr == null) {
             try reporter.report(
                 entry.value_ptr.line_no,
-                "Unknown Label '{s}'",
+                "unknown label '{s}'",
                 .{entry.value_ptr.name},
             );
             return error.UnknownLabel;
