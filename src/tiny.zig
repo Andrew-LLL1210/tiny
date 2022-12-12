@@ -124,7 +124,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             const kv = try label_table.getOrPut(label_name);
             if (kv.found_existing and kv.value_ptr.addr != null) {
                 try reporter.reportDuplicateLabel(label_name, kv.value_ptr.line_no, kv.value_ptr.addr orelse 0 >= 900);
-                return error.DuplicateLabel;
+                return error.ReportedError;
             }
             if (!kv.found_existing)
                 kv.value_ptr.* = LabelData.init(label_name, reporter.line_no, addr, alloc)
@@ -155,7 +155,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             .define_storage => |size| try listing.appendNTimes(null, size),
         } else {
             try reporter.report(null, "invalid instruction: \'{s}\'", .{src});
-            return error.InvalidSourceInstruction;
+            return error.ReportedError;
         };
     }
 
@@ -168,7 +168,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
                 "unknown label '{s}'",
                 .{entry.value_ptr.name},
             );
-            return error.UnknownLabel;
+            return error.ReportedError;
         }
 
         const label_data = entry.value_ptr.*;

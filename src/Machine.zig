@@ -48,7 +48,9 @@ pub fn init(in: Reader, out: Writer, err: Writer) Machine {
 }
 
 pub fn loadListing(self: *Machine, listing: Listing) void {
-    for (listing) |m_word, i| if (m_word) |word| {self.memory[i] = word;};
+    for (listing) |m_word, i| if (m_word) |word| {
+        self.memory[i] = word;
+    };
 }
 
 const Exit = error{ Stop, SegFault };
@@ -127,8 +129,7 @@ fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void 
 /// throws an error if the line cannot be parsed as a (decimal) integer
 fn inputInteger(self: *Machine) !void {
     var buf: [100]u8 = undefined;
-    const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n')
-        orelse return error.EndOfStream;
+    const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n') orelse return error.EndOfStream;
     const line = std.mem.trim(u8, rline, " \t\r\n");
     self.acc = try std.fmt.parseInt(Word, line, 10);
 }
@@ -150,7 +151,7 @@ fn inputString(self: *Machine) !void {
         else => {
             self.memory[self.acc] = char;
             self.acc += 1;
-        }
+        },
     } else |err| return err;
 }
 

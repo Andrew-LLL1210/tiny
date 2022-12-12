@@ -44,7 +44,7 @@ pub fn main() !void {
     defer file.close();
 
     const listing = tiny.readSource(fin, std.heap.page_allocator, &reporter) catch |err| switch (err) {
-        error.UnknownLabel, error.DuplicateLabel => return,
+        error.ReportedError => return,
         else => return err,
     };
     defer std.heap.page_allocator.free(listing);
