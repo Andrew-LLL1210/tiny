@@ -48,22 +48,32 @@ pub const Reporter = struct {
         );
     }
 
-    pub fn reportDuplicateLabel(self: Reporter, label_name: []const u8, line_no: usize, is_rom: bool,) !void {
+    pub fn reportDuplicateLabel(
+        self: Reporter,
+        label_name: []const u8,
+        line_no: usize,
+        is_rom: bool,
+    ) !void {
         try self.report(null, "duplicate label '{s}'", .{label_name});
         if (is_rom)
             try self.note(null, "'{s}' is reserved", .{canonicalName(label_name).?})
-        else try self.note(line_no, "original label here", .{});
+        else
+            try self.note(line_no, "original label here", .{});
     }
 
     pub fn canonicalName(label_name: []const u8) ?[]const u8 {
-        inline for (.{"printInteger", "printString", "inputInteger", "inputString",}) |name|
+        inline for (.{
+            "printInteger",
+            "printString",
+            "inputInteger",
+            "inputString",
+        }) |name|
             if (eqlIgnoreCase(label_name, name)) return name;
         return null;
     }
 };
 
-
-const AssemblyError = error {
+const AssemblyError = error{
     DuplicateLabel,
     UnknownLabel,
     InvalidSourceInstruction,
@@ -75,7 +85,6 @@ pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
 
-    // TODO: use a custom ctx that performs case-insensitive comparisons
     var label_table = HashMap.init(alloc);
     defer label_table.deinit();
     defer {
@@ -85,7 +94,12 @@ pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
     }
 
     // put the builtins in the label_table
-    inline for (.{"printInteger", "printString", "inputInteger", "inputString",}) |name, i|
+    inline for (.{
+        "printInteger",
+        "printString",
+        "inputInteger",
+        "inputString",
+    }) |name, i|
         try label_table.putNoClobber(name, LabelData.initRom(name, i, alloc));
 
     // holds the lines because we need them to last
@@ -96,16 +110,10 @@ pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
     // get a line
     while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
         reporter.line_no += 1;
-        const line = mem.trimRight(u8, rline, "\r\n");
+        const parts = separateParts(rline);
 
-        // remove comment
-        const noncomment =
-        if (mem.indexOf(u8, line, ";")) |ix| line[0..ix] else line;
-
-        // separate label if exists
-        const src = if (mem.indexOf(u8, noncomment, ":")) |ix| lbl: {
-            const label_name = mem.trim(u8, noncomment[0..ix], " \t");
-            // TODO: check if label name is valid
+        if (parts.label) |label_name| {
+            // TODO check if label is valid
 
             // put label address in label_table if not duplicate
             const addr = @truncate(u16, listing.items.len);
@@ -120,13 +128,9 @@ pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
                 kv.value_ptr.addr = addr;
                 kv.value_ptr.line_no = reporter.line_no;
             }
+        }
 
-            break :lbl mem.trim(u8, noncomment[ix + 1 ..], " \t");
-        } else mem.trim(u8, noncomment, " \t");
-
-        if (src.len == 0) continue;
-
-        if (parseInstruction(src)) |inst| switch (inst) {
+        if (parts.instruction) |src| if (parseInstruction(src)) |inst| switch (inst) {
             .op_noarg => |op| try listing.append((Operation{ .op = op, .arg = 0 }).encode()),
             .op_imm => |operation| try listing.append(operation.encode()),
             .op_label => |data| {
@@ -148,14 +152,18 @@ pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
         } else {
             try reporter.report(null, "invalid instruction: \'{s}\'", .{src});
             return error.InvalidSourceInstruction;
-        }
+        };
     }
 
     // reify labels
     var it = label_table.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.addr == null) {
-            try reporter.report(entry.value_ptr.line_no, "Unknown Label '{s}'", .{entry.value_ptr.name},);
+            try reporter.report(
+                entry.value_ptr.line_no,
+                "Unknown Label '{s}'",
+                .{entry.value_ptr.name},
+            );
             return error.UnknownLabel;
         }
 
@@ -167,13 +175,58 @@ pub fn readSource(in: Reader, alloc: Allocator, reporter: *Reporter) !Listing {
     return listing.toOwnedSlice();
 }
 
+pub const Parts = struct {
+    label: ?[]const u8,
+    instruction: ?[]const u8,
+    comment: ?[]const u8,
+};
+
+pub fn separateParts(line: []const u8) Parts {
+    var colon: ?usize = null;
+    var semicolon: ?usize = null;
+    var state: enum { not_string, string, escape } = .not_string;
+
+    for (line) |char, i| switch (state) {
+        .not_string => switch (char) {
+            '"' => state = .string,
+            ':' => colon = i,
+            ';' => {
+                semicolon = i;
+                break;
+            },
+            else => {},
+        },
+        .string => switch (char) {
+            '"' => state = .not_string,
+            '\\' => state = .escape,
+        },
+        .escape => state = .string,
+    };
+
+    const label = if (colon) |i| mem.trim(u8, line[0..i], " \t\r") else null;
+    const comment = if (semicolon) |i| mem.trimRight(u8, line[i + 1 ..], "\r") else null;
+    const instruction_r = mem.trim(u8, line[colon orelse 0 .. semicolon orelse line.len], " \t\r:");
+    const instruction = if (instruction_r.len == 0) null else instruction_r;
+
+    return .{
+        .label = label,
+        .instruction = instruction,
+        .comment = comment,
+    };
+}
+
 const LabelData = struct {
     name: []const u8,
     line_no: usize,
     addr: ?u16,
     references: ArrayList(*Word),
 
-    fn init(name: []const u8, line_no: usize, addr: ?u16, alloc: Allocator,) LabelData {
+    fn init(
+        name: []const u8,
+        line_no: usize,
+        addr: ?u16,
+        alloc: Allocator,
+    ) LabelData {
         return .{
             .name = name,
             .line_no = line_no,
@@ -182,7 +235,7 @@ const LabelData = struct {
         };
     }
 
-    fn initNull(name: []const u8, line_no:usize, alloc: Allocator) LabelData {
+    fn initNull(name: []const u8, line_no: usize, alloc: Allocator) LabelData {
         return init(name, line_no, null, alloc);
     }
 
