@@ -80,19 +80,19 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
     const arg = operation.arg;
     switch (operation.op) {
         .stop => return Exit.Stop,
-        .ld_from => self.acc = self.memory[arg],
+        .ld_from => self.acc = (try self.at(arg)).*,
         .ld_imm, .lda_of => self.acc = arg,
-        .st_to => self.memory[arg] = self.acc,
-        .sti_to => self.memory[@intCast(Ptr, self.memory[arg])] = self.acc,
-        .add_by => self.acc = self.wrap(self.acc +% self.memory[arg]),
-        .sub_by => self.acc = self.wrap(self.acc -% self.memory[arg]),
-        .mul_by => self.acc = self.wrap(self.acc *% self.memory[arg]),
-        .div_by => self.acc = @divTrunc(self.acc, self.memory[arg]),
+        .st_to => (try self.at(arg)).* = self.acc,
+        .sti_to => (try self.at((try self.at(arg)).*)).* = self.acc,
+        .add_by => self.acc = self.wrap(self.acc +% (try self.at(arg)).*),
+        .sub_by => self.acc = self.wrap(self.acc -% (try self.at(arg)).*),
+        .mul_by => self.acc = self.wrap(self.acc *% (try self.at(arg)).*),
+        .div_by => self.acc = try self.div(self.acc, (try self.at(arg)).*),
         .add_imm => self.acc = self.wrap(self.acc +% arg),
         .sub_imm => self.acc = self.wrap(self.acc -% arg),
         .mul_imm => self.acc = self.wrap(self.acc *% arg),
-        .div_imm => self.acc = @divTrunc(self.acc, arg),
-        .ldi_from => self.acc = self.memory[@intCast(Ptr, self.memory[arg])],
+        .div_imm => self.acc = try self.div(self.acc, arg),
+        .ldi_from => self.acc = (try self.at((try self.at(arg)).*)).*,
         .in => self.acc = try self.in.readByte(),
         .out => try self.out.writeByte(@intCast(u8, self.acc)),
         .jmp_to => self.ip = arg,
@@ -120,34 +120,23 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
         },
         .ret => {
             self.sp = self.bp;
-            self.bp = @intCast(Ptr, self.memory[@intCast(Ptr, self.sp)]);
+            self.bp = @intCast(Ptr, (try self.at(self.sp)).*);
             self.sp += 1;
-            self.ip = @intCast(Ptr, self.memory[@intCast(Ptr, self.sp)]);
+            self.ip = @intCast(Ptr, (try self.at(self.sp)).*);
             self.sp += 1;
         },
-        .push => {
-            self.sp -= 1;
-            self.memory[@intCast(Ptr, self.sp)] = self.acc;
-        },
+        .push => try self.push(self.acc),
         .pop => {
             self.acc = self.memory[@intCast(Ptr, self.sp)];
             self.sp += 1;
         },
-        .ldparam_no => {
-            self.acc = self.memory[@intCast(Ptr, self.bp + arg + 1)];
-        },
-        .push_from => {
-            self.sp -= 1;
-            self.memory[@intCast(Ptr, self.sp)] = self.memory[arg];
-        },
+        .ldparam_no => self.acc = (try self.at(self.bp + arg + 1)).*,
+        .push_from => try self.push((try self.at(arg)).*),
         .pop_to => {
             self.memory[arg] = self.memory[@intCast(Ptr, self.sp)];
             self.sp += 1;
         },
-        .pusha_of => {
-            self.sp -= 1;
-            self.memory[@intCast(Ptr, self.sp)] = arg;
-        },
+        .pusha_of => try self.push(arg),
     }
 }
 
@@ -155,11 +144,33 @@ fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void 
     if (std.math.compare(self.acc, op, 0)) self.ip = dst;
 }
 
+fn push(self: *Machine, operand: Word) !void {
+    // TODO add stackoverflow check?
+    self.sp -= 1;
+    (try self.at(self.sp)).* = operand;
+}
+
 fn wrap(self: *Machine, n: Word) Word {
     const res = @mod(n + 99999, 199999) - 99999;
     if (res != n)
         self.reporter.report(.bare, .warning, "overflow: {d} -> {d}", .{ n, res }) catch {};
     return res;
+}
+
+fn at(self: *Machine, i: Word) !*Word {
+    if (i < 0 or i >= 900) {
+        try self.reporter.report(.bare, .err, "invalid memory access at address {d}", .{i});
+        return error.ReportedError;
+    }
+    return &self.memory[@intCast(Ptr, i)];
+}
+
+fn div(self: *Machine, num: Word, den: Word) !Word {
+    if (den == 0) {
+        try self.reporter.report(.bare, .err, "division by zero", .{});
+        return error.ReportedError;
+    }
+    return @divTrunc(num, den);
 }
 
 /// consumes a WHOLE line of input from self.in and parses it as an integer
