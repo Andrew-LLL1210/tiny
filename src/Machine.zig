@@ -117,7 +117,29 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
             self.ip = @truncate(u16, self.memory[self.sp]);
             self.sp += 1;
         },
-        else => @panic("operation not implemented"),
+        .push => {
+            self.sp -= 1;
+            self.memory[self.sp] = self.acc;
+        },
+        .pop => {
+            self.acc = self.memory[self.sp];
+            self.sp += 1;
+        },
+        .ldparam_no => {
+            self.acc = self.memory[self.bp + arg + 1];
+        },
+        .push_from => {
+            self.sp -= 1;
+            self.memory[self.sp] = self.memory[arg];
+        },
+        .pop_to => {
+            self.memory[arg] = self.memory[self.sp];
+            self.sp += 1;
+        },
+        .pusha_of => {
+            self.sp -= 1;
+            self.memory[self.sp] = arg;
+        },
     }
 }
 
