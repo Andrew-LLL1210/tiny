@@ -157,7 +157,7 @@ fn inputInteger(self: *Machine) !void {
     var buf: [100]u8 = undefined;
     const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n') orelse return error.EndOfStream;
     const line = std.mem.trim(u8, rline, " \t\r\n");
-    self.acc = try std.fmt.parseInt(Word, line, 10);
+    self.acc = wrap(try std.fmt.parseInt(Word, line, 10));
 }
 
 fn printInteger(self: *Machine) !void {
