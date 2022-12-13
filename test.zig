@@ -7,6 +7,7 @@ const expectError = testing.expectError;
 const tiny = @import("src/tiny.zig");
 const Word = @import("src/Machine.zig").Word;
 const Listing = @import("src/Machine.zig").Listing;
+const Reporter = @import("src/reporter.zig").Reporter;
 
 fn expectFailureFromFile(
     comptime filepath: []const u8,
@@ -20,7 +21,7 @@ fn expectFailureFromFile(
     const err = buf_err.writer();
     defer buf_err.deinit();
 
-    var reporter = tiny.Reporter(@TypeOf(err)){
+    var reporter = Reporter(@TypeOf(err)){
         .path = "file",
         .writer = err,
     };
@@ -44,7 +45,7 @@ fn expectListingFromFile(
     const err = buf_err.writer();
     defer buf_err.deinit();
 
-    var reporter = tiny.Reporter(@TypeOf(err)){
+    var reporter = Reporter(@TypeOf(err)){
         .path = "file",
         .writer = err,
     };

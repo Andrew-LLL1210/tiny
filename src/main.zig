@@ -6,6 +6,7 @@ const Writer = std.fs.File.Writer;
 const Word = u24;
 
 const tiny = @import("tiny.zig");
+const Reporter = @import("reporter.zig").Reporter;
 const Operation = @import("Operation.zig");
 const Listing = tiny.listing;
 const Machine = @import("Machine.zig");
@@ -34,7 +35,7 @@ pub fn main() !void {
     };
     defer std.heap.page_allocator.free(filepath);
 
-    var reporter = tiny.Reporter(Writer){
+    var reporter = Reporter(Writer){
         .path = filepath,
         .writer = stderr,
     };

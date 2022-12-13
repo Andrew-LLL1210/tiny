@@ -6,7 +6,7 @@ const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Operation = @import("Operation.zig");
-const Reporter = @import("tiny.zig").Reporter;
+const Reporter = @import("reporter.zig").Reporter;
 
 pub const Word = i24;
 pub const Ptr = u16;
