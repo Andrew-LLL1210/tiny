@@ -10,7 +10,6 @@ const Listing = @import("src/Machine.zig").Listing;
 
 fn expectFailureFromFile(
     comptime filepath: []const u8,
-    expected_error: anyerror,
     expected_message: []const u8,
 ) !void {
     const buf_in = @embedFile(filepath);
@@ -28,7 +27,7 @@ fn expectFailureFromFile(
 
     const error_union = tiny.readSource(in, testing.allocator, &reporter);
     defer if (error_union) |listing| testing.allocator.free(listing) else |_| {};
-    try expectError(expected_error, error_union);
+    try expectError(error.ReportedError, error_union);
     try expectEqualStrings(expected_message, buf_err.items);
 }
 
@@ -61,21 +60,18 @@ fn expectListingFromFile(
 test "fail to assemble" {
     try expectFailureFromFile(
         "test/duplicate-label.tny",
-        error.DuplicateLabel,
         "\x1b[97mfile:2: \x1b[91merror:\x1b[97m duplicate label 'SAMElabel'\x1b[0m\n" ++
             "\x1b[97mfile:1: \x1b[96mnote:\x1b[97m original label here\x1b[0m\n",
     );
 
     try expectFailureFromFile(
         "test/inputInteger.tny",
-        error.DuplicateLabel,
         "\x1b[97mfile:3: \x1b[91merror:\x1b[97m duplicate label 'INPUTINTEGER'\x1b[0m\n" ++
             "\x1b[97mfile:3: \x1b[96mnote:\x1b[97m 'inputInteger' is reserved\x1b[0m\n",
     );
 
     try expectFailureFromFile(
         "test/unknown-label.tny",
-        error.UnknownLabel,
         "\x1b[97mfile:1: \x1b[91merror:\x1b[97m unknown label 'cat'\x1b[0m\n",
     );
 }

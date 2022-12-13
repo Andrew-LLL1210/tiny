@@ -5,6 +5,7 @@ const mem = std.mem;
 const ascii = std.ascii;
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
+const HashMap = std.HashMap;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Operation = @import("Operation.zig");
@@ -83,13 +84,15 @@ const AssemblyError = error{
     InvalidSourceInstruction,
 };
 
+const LabelTable = HashMap([]const u8, LabelData, CaseInsensitiveContext, 80);
+
 /// read tiny source code and produce a listing
 pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
 
-    var label_table = HashMap.init(alloc);
+    var label_table = LabelTable.init(alloc);
     defer label_table.deinit();
     defer {
         var it = label_table.valueIterator();
@@ -114,7 +117,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     // get a line
     while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
         reporter.line_no += 1;
-        const parts = separateParts(rline);
+        const parts = try separateParts(rline, line_alloc);
 
         if (parts.label) |label_name| {
             // TODO check if label is valid
@@ -134,8 +137,8 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             }
         }
 
-        if (parts.instruction) |src| if (parseInstruction(src)) |inst| switch (inst) {
-            .op_noarg => |op| try listing.append((Operation{ .op = op, .arg = 0 }).encode()),
+        if (parts.op) |op| switch (try parseInstruction(op, parts.argument)) {
+            .op_noarg => |op_| try listing.append((Operation{ .op = op_, .arg = 0 }).encode()),
             .op_imm => |operation| try listing.append(operation.encode()),
             .op_label => |data| {
                 const token = try listing.addOne();
@@ -153,25 +156,22 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             },
             .define_byte => |word| try listing.append(word),
             .define_storage => |size| try listing.appendNTimes(null, size),
-        } else {
-            try reporter.report(null, "invalid instruction: \'{s}\'", .{src});
-            return error.ReportedError;
         };
     }
 
     // reify labels
-    var it = label_table.iterator();
-    while (it.next()) |entry| {
-        if (entry.value_ptr.addr == null) {
+    var it = label_table.valueIterator();
+    while (it.next()) |value_ptr| {
+        if (value_ptr.addr == null) {
             try reporter.report(
-                entry.value_ptr.line_no,
+                value_ptr.line_no,
                 "unknown label '{s}'",
-                .{entry.value_ptr.name},
+                .{value_ptr.name},
             );
             return error.ReportedError;
         }
 
-        const label_data = entry.value_ptr.*;
+        const label_data = value_ptr.*;
         for (label_data.references.items) |word_ptr|
             word_ptr.* += label_data.addr.?;
     }
@@ -181,43 +181,59 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
 
 pub const Parts = struct {
     label: ?[]const u8,
-    instruction: ?[]const u8,
-    comment: ?[]const u8,
+    op: ?[]const u8,
+    argument: ?[]const u8,
 };
 
-pub fn separateParts(line: []const u8) Parts {
-    var colon: ?usize = null;
-    var semicolon: ?usize = null;
-    var state: enum { not_string, string, escape } = .not_string;
+pub const ParserState = enum(usize) { s0, lb, s1, s2, op, s3, ar, st, es, s4, xx, oo };
 
-    for (line) |char, i| switch (state) {
-        .not_string => switch (char) {
-            '"' => state = .string,
-            ':' => colon = i,
-            ';' => {
-                semicolon = i;
-                break;
-            },
-            else => {},
-        },
-        .string => switch (char) {
-            '"' => state = .not_string,
-            '\\' => state = .escape,
-            else => {},
-        },
-        .escape => state = .string,
-    };
+pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
+    var label_or_op = ArrayList(u8).init(alloc);
+    var op = ArrayList(u8).init(alloc);
+    var arg = ArrayList(u8).init(alloc);
+    var is_label: bool = false;
 
-    const label = if (colon) |i| mem.trim(u8, line[0..i], " \t\r") else null;
-    const comment = if (semicolon) |i| mem.trimRight(u8, line[i + 1 ..], "\r") else null;
-    const instruction_r = mem.trim(u8, line[colon orelse 0 .. semicolon orelse line.len], " \t\r:");
-    const instruction = if (instruction_r.len == 0) null else instruction_r;
+    var state: ParserState = .s0;
+
+    for (line) |char| {
+        if (char == '\r') break;
+        if (state == .es) try arg.append(switch (char) {
+            'n' => '\n',
+            else => char,
+        });
+
+        // Tabularized implementation of an FSA
+        const state_transition: [10]ParserState = switch (char) {
+            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => return error.BadByte,
+            ' ', '\t' => .{ .s0, .s1, .s1, .s2, .s3, .s3, .s4, .st, .st, .s4 },
+            ':' => .{ .xx, .s2, .s2, .xx, .xx, .xx, .xx, .st, .st, .xx },
+            '"' => .{ .xx, .st, .st, .xx, .st, .st, .xx, .s4, .st, .xx },
+            ';' => .{ .oo, .oo, .oo, .oo, .oo, .oo, .oo, .st, .st, .oo },
+            '\\' => .{ .xx, .xx, .xx, .xx, .xx, .xx, .xx, .es, .st, .xx },
+            else => .{ .lb, .lb, .ar, .op, .op, .ar, .ar, .st, .st, .xx },
+        };
+
+        state = state_transition[@enumToInt(state)];
+        if (state == .xx) return error.ParseError;
+        if (state == .oo) break;
+
+        if (state == .s2) is_label = true;
+
+        if (state == .lb) try label_or_op.append(char);
+        if (state == .op) try op.append(char);
+        if (state == .ar) try arg.append(char);
+        if (state == .st) try arg.append(char);
+    }
 
     return .{
-        .label = label,
-        .instruction = instruction,
-        .comment = comment,
+        .label = if (is_label) wrapNull(label_or_op.toOwnedSlice()) else null,
+        .op = wrapNull(if (is_label) op.toOwnedSlice() else label_or_op.toOwnedSlice()),
+        .argument = wrapNull(arg.toOwnedSlice()),
     };
+}
+
+fn wrapNull(src: []const u8) ?[]const u8 {
+    return if (src.len > 0) src else null;
 }
 
 const LabelData = struct {
@@ -249,7 +265,7 @@ const LabelData = struct {
     }
 };
 
-const HashMap = std.HashMap([]const u8, LabelData, struct {
+const CaseInsensitiveContext = struct {
     pub fn hash(_: @This(), key: []const u8) u64 {
         // case insensitive hashing
         var wh = std.hash.Wyhash.init(0);
@@ -267,7 +283,7 @@ const HashMap = std.HashMap([]const u8, LabelData, struct {
     pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
         return eqlIgnoreCase(a, b);
     }
-}, 80);
+};
 
 const Instruction = union(enum) {
     op_noarg: Operation.Op,
@@ -281,96 +297,69 @@ const Instruction = union(enum) {
     define_storage: u16,
 };
 
-fn parseInstruction(line: []const u8) ?Instruction {
-    inline for (ops_noarg) |data| {
-        if (eqlIgnoreCase(line, data.mnemonic))
-            return .{ .op_noarg = data.op };
-    }
-
-    var it = mem.tokenize(u8, line, " ");
-    const mnemonic = it.next() orelse unreachable;
-
-    if (eqlIgnoreCase(mnemonic, "dc")) {
-        // elegant string parsing**
-        // make sure it's wrapped in ""
-        const str = mem.trim(u8, it.rest(), " \t");
-        if (str[0] != '"') return null;
-        if (str[str.len - 1] != '"') return null;
-
-        const innerstr = str[1 .. str.len - 1];
-        // assume this is okay for now
-        return .{ .define_characters = innerstr };
-    }
-
-    const arg = it.next() orelse return null;
-    if (it.next()) |_| return null;
-
-    if (std.ascii.isDigit(arg[0])) {
-        inline for (ops_imm) |data| {
-            if (eqlIgnoreCase(mnemonic, data.mnemonic))
-                return .{ .op_imm = .{
-                    .op = data.op,
-                    .arg = std.fmt.parseInt(u16, arg, 10) catch return null,
-                } };
+fn parseInstruction(op: []const u8, arg_m: ?[]const u8) !Instruction {
+    if (arg_m) |arg| {
+        if (eqlIgnoreCase(op, "db")) {
+            return .{ .define_byte = try std.fmt.parseInt(Word, arg, 10) };
         }
-    } else {
-        inline for (ops_label) |data| {
-            if (eqlIgnoreCase(mnemonic, data.mnemonic))
-                return .{ .op_label = .{
-                    .op = data.op,
+
+        if (eqlIgnoreCase(op, "ds")) {
+            return .{ .define_storage = try std.fmt.parseInt(u16, arg, 10) };
+        }
+
+        if (eqlIgnoreCase(op, "dc")) {
+            if (arg[0] != '"') return error.NeedsString;
+            return .{ .define_characters = arg[1..] };
+        }
+    }
+
+    inline for (op_list) |op_data| if (eqlIgnoreCase(op, op_data.mnemonic)) {
+        if (arg_m) |arg| {
+            return if (ascii.isDigit(arg[0])) .{ .op_imm = .{
+                .op = op_data.variants[1] orelse return error.DislikesImmediate,
+                .arg = try std.fmt.parseInt(Ptr, arg, 10),
+            } } else .{
+                .op_label = .{
+                    .op = op_data.variants[2] orelse return error.DislikesLabel,
                     .label = arg,
-                } };
-        }
-    }
-
-    if (eqlIgnoreCase(mnemonic, "db")) {
-        return .{ .define_byte = std.fmt.parseInt(Word, arg, 10) catch return null };
-    }
-
-    if (eqlIgnoreCase(mnemonic, "ds")) {
-        return .{ .define_storage = std.fmt.parseInt(u16, arg, 10) catch return null };
-    }
-
-    return null;
+                },
+            };
+        } else return .{
+            .op_noarg = op_data.variants[0] orelse return error.NeedsOperand,
+        };
+    };
+    return error.NotAnOperation;
 }
 
-const ops_noarg = [_]struct { op: Operation.Op, mnemonic: []const u8 }{
-    .{ .op = .stop, .mnemonic = "stop" },
-    .{ .op = .in, .mnemonic = "in" },
-    .{ .op = .out, .mnemonic = "out" },
-    .{ .op = .ret, .mnemonic = "ret" },
-    .{ .op = .push, .mnemonic = "push" },
-    .{ .op = .pop, .mnemonic = "pop" },
+const OpData = struct {
+    mnemonic: []const u8,
+    variants: [3]?Operation.Op,
 };
 
-const ops_imm = [_]struct { op: Operation.Op, mnemonic: []const u8 }{
-    .{ .op = .ld_imm, .mnemonic = "ld" },
-    .{ .op = .add_imm, .mnemonic = "add" },
-    .{ .op = .sub_imm, .mnemonic = "sub" },
-    .{ .op = .mul_imm, .mnemonic = "mul" },
-    .{ .op = .div_imm, .mnemonic = "div" },
-    .{ .op = .ldparam_no, .mnemonic = "ldparam" },
-};
-
-const ops_label = [_]struct { op: Operation.Op, mnemonic: []const u8 }{
-    .{ .op = .ld_from, .mnemonic = "ld" },
-    .{ .op = .ldi_from, .mnemonic = "ldi" },
-    .{ .op = .lda_of, .mnemonic = "lda" },
-    .{ .op = .st_to, .mnemonic = "st" },
-    .{ .op = .sti_to, .mnemonic = "sti" },
-    .{ .op = .add_by, .mnemonic = "add" },
-    .{ .op = .sub_by, .mnemonic = "sub" },
-    .{ .op = .mul_by, .mnemonic = "mul" },
-    .{ .op = .div_by, .mnemonic = "div" },
-    .{ .op = .jmp_to, .mnemonic = "jmp" },
-    .{ .op = .je_to, .mnemonic = "je" },
-    .{ .op = .jne_to, .mnemonic = "jne" },
-    .{ .op = .jg_to, .mnemonic = "jg" },
-    .{ .op = .jge_to, .mnemonic = "jge" },
-    .{ .op = .jl_to, .mnemonic = "jl" },
-    .{ .op = .jle_to, .mnemonic = "jle" },
-    .{ .op = .call, .mnemonic = "call" },
-    .{ .op = .push_from, .mnemonic = "push" },
-    .{ .op = .pop_to, .mnemonic = "pop" },
-    .{ .op = .pusha_of, .mnemonic = "pusha" },
+const op_list = [_]OpData{
+    .{ .mnemonic = "stop", .variants = .{ .stop, null, null } },
+    .{ .mnemonic = "ld", .variants = .{ null, .ld_imm, .ld_from } },
+    .{ .mnemonic = "ldi", .variants = .{ null, null, .ldi_from } },
+    .{ .mnemonic = "lda", .variants = .{ null, null, .lda_of } },
+    .{ .mnemonic = "st", .variants = .{ null, null, .st_to } },
+    .{ .mnemonic = "sti", .variants = .{ null, null, .sti_to } },
+    .{ .mnemonic = "add", .variants = .{ null, .add_imm, .add_by } },
+    .{ .mnemonic = "sub", .variants = .{ null, .sub_imm, .sub_by } },
+    .{ .mnemonic = "mul", .variants = .{ null, .mul_imm, .mul_by } },
+    .{ .mnemonic = "div", .variants = .{ null, .div_imm, .div_by } },
+    .{ .mnemonic = "in", .variants = .{ .in, null, null } },
+    .{ .mnemonic = "out", .variants = .{ .out, null, null } },
+    .{ .mnemonic = "jmp", .variants = .{ null, null, .jmp_to } },
+    .{ .mnemonic = "je", .variants = .{ null, null, .je_to } },
+    .{ .mnemonic = "jne", .variants = .{ null, null, .jne_to } },
+    .{ .mnemonic = "jg", .variants = .{ null, null, .jg_to } },
+    .{ .mnemonic = "jge", .variants = .{ null, null, .jge_to } },
+    .{ .mnemonic = "jl", .variants = .{ null, null, .jl_to } },
+    .{ .mnemonic = "jle", .variants = .{ null, null, .jle_to } },
+    .{ .mnemonic = "call", .variants = .{ null, null, .call } },
+    .{ .mnemonic = "ret", .variants = .{ .ret, null, null } },
+    .{ .mnemonic = "push", .variants = .{ .push, null, .push_from } },
+    .{ .mnemonic = "pop", .variants = .{ .pop, null, .pop_to } },
+    .{ .mnemonic = "ldparam", .variants = .{ null, .ldparam_no, null } },
+    .{ .mnemonic = "pusha", .variants = .{ null, null, .pusha_of } },
 };

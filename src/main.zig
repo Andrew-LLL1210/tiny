@@ -34,7 +34,7 @@ pub fn main() !void {
     };
     defer std.heap.page_allocator.free(filepath);
 
-    var reporter = tiny.Reporter{
+    var reporter = tiny.Reporter(Writer){
         .filepath = filepath,
         .writer = stderr,
     };
