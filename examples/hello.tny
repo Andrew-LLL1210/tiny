@@ -2,4 +2,4 @@ lda message
 call printString
 stop
 
-message: dc "Hallo Welt"
+message: dc "Hallo Welt\n"

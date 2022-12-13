@@ -10,8 +10,6 @@ main:
 
     lda welcome
     call printString
-    ld newline
-    out
 
     while_1:
         lda prompt
@@ -36,7 +34,7 @@ main:
     out
 stop
 
-welcome: dc "This program calculates the arithmetic mean of a set of integers."
+welcome: dc "This program calculates the arithmetic mean of a set of integers.\n"
 prompt: dc "Enter a number (0 -> exit): "
 answer: dc "The integer arithmetic mean is "
 newline: db 10

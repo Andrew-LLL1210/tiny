@@ -77,8 +77,8 @@ test "fail to assemble" {
 }
 
 test "produce listing" {
-    try expectListingFromFile("examples/avg.tny", 157, null);
-    try expectListingFromFile("examples/hello.tny", 14, null);
+    try expectListingFromFile("examples/avg.tny", 156, null);
+    try expectListingFromFile("examples/hello.tny", 15, null);
     try expectListingFromFile("examples/answer.tny", 5, &.{
         12002,
         42,

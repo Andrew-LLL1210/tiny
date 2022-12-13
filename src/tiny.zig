@@ -197,6 +197,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
 
     for (line) |char| {
         if (char == '\r') break;
+        if (state == .st and char != '\\') try arg.append(char);
         if (state == .es) try arg.append(switch (char) {
             'n' => '\n',
             else => char,
@@ -222,7 +223,6 @@ pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
         if (state == .lb) try label_or_op.append(char);
         if (state == .op) try op.append(char);
         if (state == .ar) try arg.append(char);
-        if (state == .st) try arg.append(char);
     }
 
     return .{
@@ -308,8 +308,8 @@ fn parseInstruction(op: []const u8, arg_m: ?[]const u8) !Instruction {
         }
 
         if (eqlIgnoreCase(op, "dc")) {
-            if (arg[0] != '"') return error.NeedsString;
-            return .{ .define_characters = arg[1..] };
+            if (arg[arg.len - 1] != '"') return error.NeedsString;
+            return .{ .define_characters = arg[0 .. arg.len - 1] };
         }
     }
 
