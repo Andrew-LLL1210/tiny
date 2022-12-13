@@ -74,6 +74,16 @@ test "fail to assemble" {
         "test/unknown-label.tny",
         "\x1b[97mfile:1: \x1b[91merror:\x1b[97m unknown label 'cat'\x1b[0m\n",
     );
+
+    try expectFailureFromFile(
+        "test/badbyte.tny",
+        "\x1b[97mfile:1:5: \x1b[91merror:\x1b[97m bad byte EF\x1b[0m\n",
+    );
+
+    try expectFailureFromFile(
+        "test/parse1.tny",
+        "\x1b[97mfile:1:9: \x1b[91merror:\x1b[97m unexpected character 'a'\x1b[0m\n",
+    );
 }
 
 test "produce listing" {
