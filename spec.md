@@ -1,7 +1,7 @@
 # Spec
 
 This is just a place to document all the hidden attributes of Tiny
-(or TIDE's implementation) in order to reproduce them faithfully.
+(or TIDE's implementation) in order to reproduce them faithfully if I want to.
 
 ## Values
 
