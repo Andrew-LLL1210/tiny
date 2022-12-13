@@ -11,7 +11,7 @@ Author: Andrew Phillips
   - [ ] semantic equivanence to TIDE's machine
 - [ ] write assembler
   - [x] able to assemble a majority (~90%?) of the tiny spec
-  - [ ] work out all the kinks in parsing (dc + comments/escape sequences)
+  - [x] work out all the kinks in parsing (dc + comments/escape sequences)
   - [ ] make the assembler nice (error messages with line numbers)
 - [ ] I/O testing
 - [ ] Command Line Interface
