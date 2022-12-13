@@ -51,5 +51,8 @@ pub fn main() !void {
 
     var machine = Machine.init(stdin, stdout, stderr, &reporter);
     machine.loadListing(listing);
-    try machine.run();
+    machine.run() catch |err| switch (err) {
+        error.ReportedError => return,
+        else => return err,
+    };
 }

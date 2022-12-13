@@ -166,9 +166,27 @@ fn wrap(self: *Machine, n: Word) Word {
 /// throws an error if the line cannot be parsed as a (decimal) integer
 fn inputInteger(self: *Machine) !void {
     var buf: [100]u8 = undefined;
-    const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n') orelse return error.EndOfStream;
+    const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n') orelse {
+        try self.reporter.report(.bare, .err, "eof found while reading integer", .{});
+        return error.ReportedError;
+    };
     const line = std.mem.trim(u8, rline, " \t\r\n");
-    self.acc = self.wrap(try std.fmt.parseInt(Word, line, 10));
+    self.acc = self.wrap(std.fmt.parseInt(Word, line, 10) catch |err| switch (err) {
+        error.InvalidCharacter => if (line.len == 0) {
+            try self.reporter.report(.bare, .err, "blank line found while reading integer", .{});
+            return error.ReportedError;
+        } else {
+            try self.reporter.report(.bare, .err, "invalid character found while reading integer", .{});
+            return error.ReportedError;
+        },
+        error.Overflow => if (line[0] == '-') blk: {
+            try self.reporter.report(.bare, .warning, "input too large to parse, using -99999", .{});
+            break :blk -99999;
+        } else blk: {
+            try self.reporter.report(.bare, .warning, "input too large to parse, using 99999", .{});
+            break :blk 99999;
+        },
+    });
 }
 
 fn printInteger(self: *Machine) !void {
