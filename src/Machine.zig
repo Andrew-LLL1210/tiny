@@ -7,7 +7,7 @@ const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Operation = @import("Operation.zig");
 
-pub const Word = u24;
+pub const Word = i24;
 pub const Ptr = u16;
 pub const Listing = []const ?Word;
 
@@ -75,18 +75,18 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
         .ld_from => self.acc = self.memory[arg],
         .ld_imm, .lda_of => self.acc = arg,
         .st_to => self.memory[arg] = self.acc,
-        .sti_to => self.memory[self.memory[arg]] = self.acc,
+        .sti_to => self.memory[@intCast(Ptr, self.memory[arg])] = self.acc,
         .add_by => self.acc +%= self.memory[arg],
         .sub_by => self.acc -%= self.memory[arg],
         .mul_by => self.acc *%= self.memory[arg],
-        .div_by => self.acc /= self.memory[arg],
+        .div_by => self.acc = @divTrunc(self.acc, self.memory[arg]),
         .add_imm => self.acc +%= arg,
         .sub_imm => self.acc -%= arg,
         .mul_imm => self.acc *%= arg,
-        .div_imm => self.acc /= arg,
-        .ldi_from => self.acc = self.memory[self.memory[arg]],
+        .div_imm => self.acc = @divTrunc(self.acc, arg),
+        .ldi_from => self.acc = self.memory[@intCast(Ptr, self.memory[arg])],
         .in => self.acc = try self.in.readByte(),
-        .out => try self.out.writeByte(@truncate(u8, self.acc)),
+        .out => try self.out.writeByte(@intCast(u8, self.acc)),
         .jmp_to => self.ip = arg,
         .je_to => self.conditionalJump(.eq, arg),
         .jne_to => self.conditionalJump(.neq, arg),
@@ -112,33 +112,33 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
         },
         .ret => {
             self.sp = self.bp;
-            self.bp = @truncate(u16, self.memory[self.sp]);
+            self.bp = @intCast(Ptr, self.memory[@intCast(Ptr, self.sp)]);
             self.sp += 1;
-            self.ip = @truncate(u16, self.memory[self.sp]);
+            self.ip = @intCast(Ptr, self.memory[@intCast(Ptr, self.sp)]);
             self.sp += 1;
         },
         .push => {
             self.sp -= 1;
-            self.memory[self.sp] = self.acc;
+            self.memory[@intCast(Ptr, self.sp)] = self.acc;
         },
         .pop => {
-            self.acc = self.memory[self.sp];
+            self.acc = self.memory[@intCast(Ptr, self.sp)];
             self.sp += 1;
         },
         .ldparam_no => {
-            self.acc = self.memory[self.bp + arg + 1];
+            self.acc = self.memory[@intCast(Ptr, self.bp + arg + 1)];
         },
         .push_from => {
             self.sp -= 1;
-            self.memory[self.sp] = self.memory[arg];
+            self.memory[@intCast(Ptr, self.sp)] = self.memory[arg];
         },
         .pop_to => {
-            self.memory[arg] = self.memory[self.sp];
+            self.memory[arg] = self.memory[@intCast(Ptr, self.sp)];
             self.sp += 1;
         },
         .pusha_of => {
             self.sp -= 1;
-            self.memory[self.sp] = arg;
+            self.memory[@intCast(Ptr, self.sp)] = arg;
         },
     }
 }
@@ -167,18 +167,18 @@ fn inputString(self: *Machine) !void {
     while (self.in.readByte()) |char| switch (char) {
         '\r' => {},
         '\n' => {
-            self.memory[self.acc] = 0;
+            self.memory[@intCast(Ptr, self.acc)] = 0;
             return;
         },
         else => {
-            self.memory[self.acc] = char;
+            self.memory[@intCast(Ptr, self.acc)] = char;
             self.acc += 1;
         },
     } else |err| return err;
 }
 
 fn printString(self: *Machine) !void {
-    var it = std.mem.split(Word, self.memory[self.acc..], &.{'\x00'});
+    var it = std.mem.split(Word, self.memory[@intCast(Ptr, self.acc)..], &.{'\x00'});
     for (it.first()) |char|
-        try self.out.writeByte(@truncate(u8, char));
+        try self.out.writeByte(@intCast(u8, char));
 }

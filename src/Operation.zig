@@ -6,14 +6,16 @@ const Operation = @This();
 op: Op,
 arg: u16,
 
+// TODO deal with all the panickyness of this function
 pub fn decode(instruction: Word) Operation {
-    const op = @intToEnum(Op, instruction / 1000);
-    const arg = @truncate(u16, instruction % 1000);
+    const positive = @intCast(u24, instruction);
+    const op = @intToEnum(Op, positive / 1000);
+    const arg = @truncate(u16, positive % 1000);
     return .{ .op = op, .arg = arg };
 }
 
 pub fn encode(input: Operation) Word {
-    return 1000 * @intCast(Word, @enumToInt(input.op)) + input.arg;
+    return 1000 * @intCast(Word, @enumToInt(input.op)) + (input.arg);
 }
 
 pub const Op = enum(u8) {
