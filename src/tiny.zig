@@ -42,10 +42,11 @@ pub fn Reporter(comptime WriterT: type) type {
             args: anytype,
             comptime opts: ReportOptions,
         ) !void {
-            comptime var loc_tag: []const u8 = "";
+            comptime var loc_tag: []const u8 = "\x1b[97m";
             if (opts.path) |_| loc_tag = loc_tag ++ "{s}:";
             if (opts.line) |_| loc_tag = loc_tag ++ "{d}:";
             if (opts.col) |_| loc_tag = loc_tag ++ "{d}:";
+            loc_tag = loc_tag ++ " ";
 
             const Autos = comptime blk: {
                 var types: []const type = &.{};
@@ -61,13 +62,9 @@ pub fn Reporter(comptime WriterT: type) type {
             const sev_tag: []const u8 = switch (severity) {
                 .err => "\x1b[91merror:",
                 .note => "\x1b[96mnote:",
-            };
+            } ++ "\x1b[97m ";
 
-            const fmt =
-                "\x1b[97m" ++ loc_tag ++ " " ++
-                sev_tag ++ "\x1b[97m " ++ message ++ "\x1b[0m\n";
-
-            try self.writer.print(fmt, autos ++ args);
+            try self.writer.print(loc_tag ++ sev_tag ++ message ++ "\x1b[0m\n", autos ++ args);
         }
 
         pub fn reportDuplicateLabel(
