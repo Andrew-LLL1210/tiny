@@ -76,13 +76,13 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
         .ld_imm, .lda_of => self.acc = arg,
         .st_to => self.memory[arg] = self.acc,
         .sti_to => self.memory[@intCast(Ptr, self.memory[arg])] = self.acc,
-        .add_by => self.acc +%= self.memory[arg],
-        .sub_by => self.acc -%= self.memory[arg],
-        .mul_by => self.acc *%= self.memory[arg],
+        .add_by => self.acc = wrap(self.acc +% self.memory[arg]),
+        .sub_by => self.acc = wrap(self.acc -% self.memory[arg]),
+        .mul_by => self.acc = wrap(self.acc *% self.memory[arg]),
         .div_by => self.acc = @divTrunc(self.acc, self.memory[arg]),
-        .add_imm => self.acc +%= arg,
-        .sub_imm => self.acc -%= arg,
-        .mul_imm => self.acc *%= arg,
+        .add_imm => self.acc = wrap(self.acc +% arg),
+        .sub_imm => self.acc = wrap(self.acc -% arg),
+        .mul_imm => self.acc = wrap(self.acc *% arg),
         .div_imm => self.acc = @divTrunc(self.acc, arg),
         .ldi_from => self.acc = self.memory[@intCast(Ptr, self.memory[arg])],
         .in => self.acc = try self.in.readByte(),
@@ -145,6 +145,10 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
 
 fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void {
     if (std.math.compare(self.acc, op, 0)) self.ip = dst;
+}
+
+fn wrap(n: Word) Word {
+    return @mod(n + 99999, 199999) - 99999;
 }
 
 /// consumes a WHOLE line of input from self.in and parses it as an integer

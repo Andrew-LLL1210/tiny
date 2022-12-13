@@ -1,1 +1,16 @@
-ld -9
+ld 999
+mul 100
+add 99
+add 1
+call printInteger
+
+ld 10
+out
+
+ld 999
+mul 999
+call printInteger
+
+ld 10
+out
+stop
