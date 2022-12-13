@@ -6,10 +6,10 @@ Author: Andrew Phillips
 
 ## Checklist
 
-- [ ] create machine to emulate the tiny machine
+- [x] create machine to emulate the tiny machine
   - [x] fully functional machine
-  - [ ] semantic equivanence to TIDE's machine
-  - [ ] warnings and error messages
+  - [x] semantic equivalence to TIDE's machine (allowing minor details)
+  - [x] warnings and error messages
 - [x] write assembler
   - [x] able to assemble a majority (~90%?) of the tiny spec
   - [x] work out all the kinks in parsing (dc + comments/escape sequences)
