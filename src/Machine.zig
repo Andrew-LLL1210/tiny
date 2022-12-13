@@ -6,6 +6,7 @@ const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const Operation = @import("Operation.zig");
+const Reporter = @import("tiny.zig").Reporter;
 
 pub const Word = i24;
 pub const Ptr = u16;
@@ -33,8 +34,14 @@ bp: Ptr,
 in: Reader,
 out: Writer,
 err: Writer,
+reporter: *Reporter(Writer),
 
-pub fn init(in: Reader, out: Writer, err: Writer) Machine {
+pub fn init(
+    in: Reader,
+    out: Writer,
+    err: Writer,
+    reporter: *Reporter(Writer),
+) Machine {
     return .{
         .memory = undefined,
         .ip = 0,
@@ -44,6 +51,7 @@ pub fn init(in: Reader, out: Writer, err: Writer) Machine {
         .in = in,
         .out = out,
         .err = err,
+        .reporter = reporter,
     };
 }
 
@@ -76,13 +84,13 @@ fn executeOperation(self: *Machine, operation: Operation) !void {
         .ld_imm, .lda_of => self.acc = arg,
         .st_to => self.memory[arg] = self.acc,
         .sti_to => self.memory[@intCast(Ptr, self.memory[arg])] = self.acc,
-        .add_by => self.acc = wrap(self.acc +% self.memory[arg]),
-        .sub_by => self.acc = wrap(self.acc -% self.memory[arg]),
-        .mul_by => self.acc = wrap(self.acc *% self.memory[arg]),
+        .add_by => self.acc = self.wrap(self.acc +% self.memory[arg]),
+        .sub_by => self.acc = self.wrap(self.acc -% self.memory[arg]),
+        .mul_by => self.acc = self.wrap(self.acc *% self.memory[arg]),
         .div_by => self.acc = @divTrunc(self.acc, self.memory[arg]),
-        .add_imm => self.acc = wrap(self.acc +% arg),
-        .sub_imm => self.acc = wrap(self.acc -% arg),
-        .mul_imm => self.acc = wrap(self.acc *% arg),
+        .add_imm => self.acc = self.wrap(self.acc +% arg),
+        .sub_imm => self.acc = self.wrap(self.acc -% arg),
+        .mul_imm => self.acc = self.wrap(self.acc *% arg),
         .div_imm => self.acc = @divTrunc(self.acc, arg),
         .ldi_from => self.acc = self.memory[@intCast(Ptr, self.memory[arg])],
         .in => self.acc = try self.in.readByte(),
@@ -147,8 +155,11 @@ fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void 
     if (std.math.compare(self.acc, op, 0)) self.ip = dst;
 }
 
-fn wrap(n: Word) Word {
-    return @mod(n + 99999, 199999) - 99999;
+fn wrap(self: *Machine, n: Word) Word {
+    const res = @mod(n + 99999, 199999) - 99999;
+    if (res != n)
+        self.reporter.report(.bare, .warning, "overflow: {d} -> {d}", .{ n, res }) catch {};
+    return res;
 }
 
 /// consumes a WHOLE line of input from self.in and parses it as an integer
@@ -157,7 +168,7 @@ fn inputInteger(self: *Machine) !void {
     var buf: [100]u8 = undefined;
     const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n') orelse return error.EndOfStream;
     const line = std.mem.trim(u8, rline, " \t\r\n");
-    self.acc = wrap(try std.fmt.parseInt(Word, line, 10));
+    self.acc = self.wrap(try std.fmt.parseInt(Word, line, 10));
 }
 
 fn printInteger(self: *Machine) !void {

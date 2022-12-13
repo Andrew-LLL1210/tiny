@@ -35,7 +35,7 @@ pub fn main() !void {
     defer std.heap.page_allocator.free(filepath);
 
     var reporter = tiny.Reporter(Writer){
-        .filepath = filepath,
+        .path = filepath,
         .writer = stderr,
     };
 
@@ -49,7 +49,7 @@ pub fn main() !void {
     };
     defer std.heap.page_allocator.free(listing);
 
-    var machine = Machine.init(stdin, stdout, stderr);
+    var machine = Machine.init(stdin, stdout, stderr, &reporter);
     machine.loadListing(listing);
     try machine.run();
 }

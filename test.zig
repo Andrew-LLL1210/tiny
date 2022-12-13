@@ -21,7 +21,7 @@ fn expectFailureFromFile(
     defer buf_err.deinit();
 
     var reporter = tiny.Reporter(@TypeOf(err)){
-        .filepath = "file",
+        .path = "file",
         .writer = err,
     };
 
@@ -45,7 +45,7 @@ fn expectListingFromFile(
     defer buf_err.deinit();
 
     var reporter = tiny.Reporter(@TypeOf(err)){
-        .filepath = "file",
+        .path = "file",
         .writer = err,
     };
 

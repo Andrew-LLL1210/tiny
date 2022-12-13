@@ -8,6 +8,7 @@ const ArrayList = std.ArrayList;
 const HashMap = std.HashMap;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
+const Tuple = std.meta.Tuple;
 const Operation = @import("Operation.zig");
 const Machine = @import("Machine.zig");
 const Word = Machine.Word;
@@ -19,52 +20,71 @@ pub fn Reporter(comptime WriterT: type) type {
     return struct {
         const Self = @This();
 
-        line_no: usize = 0,
-        filepath: []const u8,
+        line: usize = 0,
+        path: []const u8,
         writer: WriterT,
 
-        const ReportType = enum {
+        pub const ReportType = enum {
             err,
             note,
+            warning,
         };
 
-        const ReportOptions = struct {
-            const Enum = enum { auto, given };
-            path: ?Enum = .auto,
-            line: ?Enum = .auto,
-            col: ?enum { given } = null,
+        pub const ReportLayout = enum {
+            auto, // file:line:
+            line, // file:{d}:
+            col, // file:line:{d}:
+            bare, //
+            pub fn tag(layout: ReportLayout) []const u8 {
+                return switch (layout) {
+                    .auto, .line => "\x1b[97m{s}:{d}: ",
+                    .col => "\x1b[97m{s}:{d}:{d}: ",
+                    .bare => "",
+                };
+            }
+        };
+
+        pub const ReportOptions = struct {
+            path: bool = true,
+            line: bool = true,
+            col: bool = false,
+        };
+
+        pub const LocOptions = struct {
+            path: ?[]const u8 = null,
+            line: ?usize = null,
+            col: ?usize = null,
+        };
+
+        pub const LocInfo = struct {
+            path: []const u8,
+            line: usize,
+            col: usize,
         };
 
         pub fn report(
             self: Self,
+            comptime layout: ReportLayout,
             comptime severity: ReportType,
             comptime message: []const u8,
             args: anytype,
-            comptime opts: ReportOptions,
         ) !void {
-            comptime var loc_tag: []const u8 = "\x1b[97m";
-            if (opts.path) |_| loc_tag = loc_tag ++ "{s}:";
-            if (opts.line) |_| loc_tag = loc_tag ++ "{d}:";
-            if (opts.col) |_| loc_tag = loc_tag ++ "{d}:";
-            loc_tag = loc_tag ++ " ";
-
-            const Autos = comptime blk: {
-                var types: []const type = &.{};
-                if (opts.path == ReportOptions.Enum.auto) types = types ++ [1]type{[]const u8};
-                if (opts.line == ReportOptions.Enum.auto) types = types ++ [1]type{usize};
-                break :blk std.meta.Tuple(types);
+            const loc_args = switch (layout) {
+                .auto, .col => .{ self.path, self.line },
+                .line => .{self.path},
+                .bare => .{},
             };
-
-            var autos: Autos = undefined;
-            if (opts.path == ReportOptions.Enum.auto) autos[0] = self.filepath;
-            if (opts.line == ReportOptions.Enum.auto) autos[autos.len - 1] = self.line_no;
 
             const sev_tag: []const u8 = switch (severity) {
                 .err => "\x1b[91merror:",
+                .warning => "\x1b[93mwarning:",
                 .note => "\x1b[96mnote:",
             } ++ "\x1b[97m ";
 
-            try self.writer.print(loc_tag ++ sev_tag ++ message ++ "\x1b[0m\n", autos ++ args);
+            try self.writer.print(
+                layout.tag() ++ sev_tag ++ message ++ "\x1b[0m\n",
+                loc_args ++ args,
+            );
         }
 
         pub fn reportDuplicateLabel(
@@ -73,11 +93,11 @@ pub fn Reporter(comptime WriterT: type) type {
             line_no: usize,
             is_rom: bool,
         ) !void {
-            try self.report(.err, "duplicate label '{s}'", .{label_name}, .{});
+            try self.report(.auto, .err, "duplicate label '{s}'", .{label_name});
             if (is_rom)
-                try self.report(.note, "'{s}' is reserved", .{canonicalName(label_name).?}, .{})
+                try self.report(.auto, .note, "'{s}' is reserved", .{canonicalName(label_name).?})
             else
-                try self.report(.note, "original label here", .{line_no}, .{ .line = .given });
+                try self.report(.line, .note, "original label here", .{line_no});
         }
 
         pub fn canonicalName(label_name: []const u8) ?[]const u8 {
@@ -132,7 +152,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     // get a line
     while (try in.readUntilDelimiterOrEofAlloc(alloc, '\n', 200)) |rline| {
         defer alloc.free(rline);
-        reporter.line_no += 1;
+        reporter.line += 1;
         const parts = try separateParts(rline, line_alloc, reporter);
 
         if (parts.label) |label_name| {
@@ -146,10 +166,10 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
                 return error.ReportedError;
             }
             if (!kv.found_existing)
-                kv.value_ptr.* = LabelData.init(label_name, reporter.line_no, addr, alloc)
+                kv.value_ptr.* = LabelData.init(label_name, reporter.line, addr, alloc)
             else {
                 kv.value_ptr.addr = addr;
-                kv.value_ptr.line_no = reporter.line_no;
+                kv.value_ptr.line_no = reporter.line;
             }
         }
 
@@ -163,7 +183,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
                 // add to references list
                 const kv = try label_table.getOrPut(data.label);
                 if (!kv.found_existing)
-                    kv.value_ptr.* = LabelData.initNull(data.label, reporter.line_no, alloc);
+                    kv.value_ptr.* = LabelData.initNull(data.label, reporter.line, alloc);
                 try kv.value_ptr.references.append(&token.*.?);
             },
             .define_characters => |string| {
@@ -180,10 +200,10 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     while (it.next()) |value_ptr| {
         if (value_ptr.addr == null) {
             try reporter.report(
+                .line,
                 .err,
                 "unknown label '{s}'",
                 .{ value_ptr.line_no, value_ptr.name },
-                .{ .line = .given },
             );
             return error.ReportedError;
         }
@@ -223,7 +243,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Par
         // Tabularized implementation of an FSA
         const state_transition: [10]ParserState = switch (char) {
             '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => {
-                try reporter.report(.err, "bad byte {X:0>2}", .{ i + 1, char }, .{ .col = .given });
+                try reporter.report(.col, .err, "bad byte {X:0>2}", .{ i + 1, char });
                 return error.ReportedError;
             },
             ' ', '\t' => .{ .s0, .s1, .s1, .s2, .s3, .s3, .s4, .st, .st, .s4 },
@@ -236,7 +256,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Par
 
         state = state_transition[@enumToInt(state)];
         if (state == .xx) {
-            try reporter.report(.err, "unexpected character '{c}'", .{ i + 1, char }, .{ .col = .given });
+            try reporter.report(.col, .err, "unexpected character '{c}'", .{ i + 1, char });
             return error.ReportedError;
         }
         if (state == .oo) break;
