@@ -40,6 +40,19 @@ pub fn Reporter(comptime WriterT: type) type {
             );
         }
 
+        pub fn reportWithCol(
+            self: Self,
+            line_no: ?usize,
+            col_no: usize,
+            comptime fmt: []const u8,
+            args: anytype,
+        ) !void {
+            try self.writer.print(
+                "\x1b[97m{s}:{d}:{d}: \x1b[91merror:\x1b[97m " ++ fmt ++ "\x1b[0m\n",
+                .{ self.filepath, line_no orelse self.line_no, col_no } ++ args,
+            );
+        }
+
         pub fn note(
             self: Self,
             line_no: ?usize,
@@ -117,7 +130,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     // get a line
     while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
         reporter.line_no += 1;
-        const parts = try separateParts(rline, line_alloc);
+        const parts = try separateParts(rline, line_alloc, reporter);
 
         if (parts.label) |label_name| {
             // TODO check if label is valid
@@ -187,7 +200,7 @@ pub const Parts = struct {
 
 pub const ParserState = enum(usize) { s0, lb, s1, s2, op, s3, ar, st, es, s4, xx, oo };
 
-pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
+pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Parts {
     var label_or_op = ArrayList(u8).init(alloc);
     var op = ArrayList(u8).init(alloc);
     var arg = ArrayList(u8).init(alloc);
@@ -195,7 +208,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
 
     var state: ParserState = .s0;
 
-    for (line) |char| {
+    for (line) |char, i| {
         if (char == '\r') break;
         if (state == .st and char != '\\') try arg.append(char);
         if (state == .es) try arg.append(switch (char) {
@@ -205,7 +218,10 @@ pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
 
         // Tabularized implementation of an FSA
         const state_transition: [10]ParserState = switch (char) {
-            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => return error.BadByte,
+            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => {
+                try reporter.reportWithCol(null, i + 1, "bad byte {X:0>2}", .{char});
+                return error.ReportedError;
+            },
             ' ', '\t' => .{ .s0, .s1, .s1, .s2, .s3, .s3, .s4, .st, .st, .s4 },
             ':' => .{ .xx, .s2, .s2, .xx, .xx, .xx, .xx, .st, .st, .xx },
             '"' => .{ .xx, .st, .st, .xx, .st, .st, .xx, .s4, .st, .xx },
@@ -215,7 +231,10 @@ pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
         };
 
         state = state_transition[@enumToInt(state)];
-        if (state == .xx) return error.ParseError;
+        if (state == .xx) {
+            try reporter.reportWithCol(null, i + 1, "unexpected character '{c}'", .{char});
+            return error.ReportedError;
+        }
         if (state == .oo) break;
 
         if (state == .s2) is_label = true;
