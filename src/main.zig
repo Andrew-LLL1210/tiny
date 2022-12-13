@@ -27,7 +27,7 @@ pub fn main() !void {
     const filename = args_it.next() orelse return (stderr.writeAll(usage));
     const filepath = std.fs.realpathAlloc(std.heap.page_allocator, filename) catch |err| switch (err) {
         error.FileNotFound => return stderr.print(
-            "\x1b[1;31merror:\x1b[39m file not found:\x1b[0m '{s}'",
+            "\x1b[91merror:\x1b[97m file not found: '{s}'\x1b[0m\n",
             .{filename},
         ),
         else => return err,
