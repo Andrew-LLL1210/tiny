@@ -42,7 +42,7 @@ pub fn Reporter(comptime WriterT: type) type {
             args: anytype,
             comptime opts: ReportOptions,
         ) !void {
-            comptime var loc_tag: []const u8 = "\x1b[97m";
+            comptime var loc_tag: []const u8 = "";
             if (opts.path) |_| loc_tag = loc_tag ++ "{s}:";
             if (opts.line) |_| loc_tag = loc_tag ++ "{d}:";
             if (opts.col) |_| loc_tag = loc_tag ++ "{d}:";
@@ -133,7 +133,8 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     defer arena.deinit();
 
     // get a line
-    while (try in.readUntilDelimiterOrEofAlloc(line_alloc, '\n', 200)) |rline| {
+    while (try in.readUntilDelimiterOrEofAlloc(alloc, '\n', 200)) |rline| {
+        defer alloc.free(rline);
         reporter.line_no += 1;
         const parts = try separateParts(rline, line_alloc, reporter);
 
