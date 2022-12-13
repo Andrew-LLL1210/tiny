@@ -9,10 +9,11 @@ Author: Andrew Phillips
 - [ ] create machine to emulate the tiny machine
   - [x] fully functional machine
   - [ ] semantic equivanence to TIDE's machine
-- [ ] write assembler
+  - [ ] warnings and error messages
+- [x] write assembler
   - [x] able to assemble a majority (~90%?) of the tiny spec
   - [x] work out all the kinks in parsing (dc + comments/escape sequences)
-  - [ ] make the assembler nice (error messages with line numbers)
+  - [x] make the assembler nice (error messages with line numbers)
 - [ ] I/O testing
 - [ ] Command Line Interface
 - [ ] Batch file processing, logging, sorting
