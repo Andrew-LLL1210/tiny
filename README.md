@@ -14,8 +14,8 @@ Author: Andrew Phillips
   - [x] able to assemble a majority (~90%?) of the tiny spec
   - [x] work out all the kinks in parsing (dc + comments/escape sequences)
   - [x] make the assembler nice (error messages with line numbers)
+- [x] Command Line Interface
 - [ ] I/O testing
-- [ ] Command Line Interface
 - [ ] Batch file processing, logging, sorting
 
 ## Testing

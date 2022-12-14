@@ -70,13 +70,13 @@ pub fn run(self: *Machine) !void {
     }
 }
 
-fn cycle(self: *Machine) !void {
+pub fn cycle(self: *Machine) !void {
     const instruction = Operation.decode(self.memory[self.ip]);
     self.ip += 1;
     return self.executeOperation(instruction);
 }
 
-fn executeOperation(self: *Machine, operation: Operation) !void {
+pub fn executeOperation(self: *Machine, operation: Operation) !void {
     const arg = operation.arg;
     switch (operation.op) {
         .stop => return Exit.Stop,
