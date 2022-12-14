@@ -30,8 +30,6 @@ pub fn main() !void {
 
     if (mem.eql(u8, command, "run")) {
         try run(stdin, stdout, stderr, &args_it, alloc);
-    } else if (mem.eql(u8, command, "test")) {
-        // test
     } else if (mem.eql(u8, command, "help")) {
         try stderr.writeAll(msg.usage);
     } else {
@@ -85,17 +83,6 @@ const msg = struct {
     const usage =
         \\
         \\tiny run [file]   - build and run a tiny program
-        \\
-        \\tiny test         - test a tiny program
-        \\    [file]        - the program to test
-        \\    [inputs]      - a folder containing input .txt files
-        \\    [outputs]     - a folder containing the expected outputs
-        \\                    - an output file must have the same name
-        \\                    - as its corresponding input
-        \\ 
-        \\    it is recommened you pipe the output of `tiny test` to a file
-        \\    in order to preserve it and to better read through
-        \\
         \\tiny help         - display this help
         \\
         \\
