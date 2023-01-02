@@ -1,54 +1,168 @@
 const std = @import("std");
 const Word = @import("Machine.zig").Word;
+const Arg = @import("Machine.zig").Ptr;
 
-const Operation = @This();
-
-op: Op,
-arg: u16,
-
-// TODO deal with all the panickyness of this function
-pub fn decode(instruction: Word) Operation {
-    const positive = @intCast(u24, instruction);
-    const op = @intToEnum(Op, positive / 1000);
-    const arg = @truncate(u16, positive % 1000);
-    return .{ .op = op, .arg = arg };
-}
-
-pub fn encode(input: Operation) Word {
-    return 1000 * @intCast(Word, @enumToInt(input.op)) + (input.arg);
-}
-
-pub const Op = enum(u8) {
-    stop = 0,
-    ld_from = 1,
-    ldi_from = 2,
-    lda_of = 3,
-    st_to = 4,
-    sti_to = 5,
-    add_by = 6,
-    sub_by = 7,
-    mul_by = 8,
-    div_by = 9,
-    in = 10,
-    out = 11,
-    jmp_to = 12,
-    jg_to = 13,
-    jl_to = 14,
-    je_to = 15,
-    call = 16,
-    ret = 17,
-    push = 18,
-    pop = 19,
-    ldparam_no = 20,
-    jge_to = 21,
-    jle_to = 22,
-    jne_to = 23,
-    push_from = 24,
-    pop_to = 25,
-    pusha_of = 26,
-    ld_imm = 91,
-    add_imm = 96,
-    sub_imm = 97,
-    mul_imm = 98,
-    div_imm = 99,
+const Operation = union(enum) {
+    stop,
+    load: Value,
+    store: VirtualAddress,
+    add: Value,
+    subtract: Value,
+    multiply: Value,
+    divide: Value,
+    in,
+    out,
+    jump: JmpArgs,
+    call: Address,
+    @"return",
+    push: Value,
+    pop: ?Address,
+    load_parameter: Arg,
 };
+
+const Value = union(enum) {
+    accumulator,
+    immediate: Arg,
+    address: Arg,
+    indirect: Arg,
+};
+
+const VirtualAddress = union(enum) {
+    address: Arg,
+    indirect: Arg,
+};
+
+const Address = Arg;
+
+const JmpArgs = struct {
+    address: Address,
+    condition: Condition,
+};
+
+const Condition = enum {
+    always,
+    equal,
+    not_equal,
+    greater,
+    less,
+    greater_or_equal,
+    less_or_equal,
+};
+
+pub fn decode(instruction: Word) ?Operation {
+    if (instruction < 0 or instruction > 99999) return null;
+    const positive = @intCast(u24, instruction);
+    const opcode = positive / 1000;
+    const arg = @truncate(Arg, positive % 1000);
+    const value: Value = if (opcode >= 90) .{ .immediate = arg } else .{ .address = arg };
+    return switch (opcode) {
+        0 => .{ .stop = {} },
+        1, 91 => .{ .load = value },
+        2 => .{ .load = .{ .indirect = arg } },
+        3 => .{ .load = .{ .immediate = arg } },
+        4 => .{ .store = .{ .address = arg } },
+        5 => .{ .store = .{ .indirect = arg } },
+        6, 96 => .{ .add = value },
+        7, 97 => .{ .subtract = value },
+        8, 98 => .{ .multiply = value },
+        9, 99 => .{ .divide = value },
+        10 => .{ .in = {} },
+        11 => .{ .out = {} },
+        12...15, 21...23 => .{ .jump = .{
+            .address = arg,
+            .condition = switch (opcode) {
+                12 => .always,
+                13 => .greater,
+                14 => .less,
+                15 => .equal,
+                21 => .greater_or_equal,
+                22 => .less_or_equal,
+                23 => .not_equal,
+                else => unreachable,
+            },
+        } },
+        16 => .{ .call = arg },
+        17 => .{ .@"return" = {} },
+        18 => .{ .push = .{ .accumulator = {} } },
+        19 => .{ .pop = null },
+        20 => .{ .load_parameter = arg },
+        24 => .{ .push = .{ .address = arg } },
+        25 => .{ .pop = arg },
+        26 => .{ .push = .{ .immediate = arg } },
+        else => null,
+    };
+}
+
+fn encode(input: Operation) ?Word {
+    return switch (input) {
+        .stop => encodeOpArg(10, 0),
+        .load => |load| switch (load) {
+            .address => |address| encodeOpArg(1, address),
+            .immediate => |value| encodeOpArg(2, value),
+            .indirect => |address| encodeOpArg(3, address),
+            .accumulator => null,
+        },
+        .store => |store| switch (store) {
+            .address => |address| encodeOpArg(4, address),
+            .indirect => |address| encodeOpArg(5, address),
+        },
+        .add, .subtract, .multiply, .divide => |op| {
+            const opcode = switch (input) {
+                .add => 6,
+                .subtract => 7,
+                .multiply => 8,
+                .divide => 9,
+            };
+            return switch (op) {
+                .immediate => |value| encodeOpArg(90 + opcode, value),
+                .address => |address| encodeOpArg(opcode, address),
+                else => null,
+            };
+        },
+        .in => encodeOpArg(10, 0),
+        .out => encodeOpArg(11, 0),
+        .jump => |jump| switch (jump.condition) {
+            .always => encodeOpArg(12, jump.address),
+            .greater => encodeOpArg(13, jump.address),
+            .less => encodeOpArg(14, jump.address),
+            .equal => encodeOpArg(15, jump.address),
+            .greater_or_equal => encodeOpArg(21, jump.address),
+            .less_or_equal => encodeOpArg(22, jump.address),
+            .not_equal => encodeOpArg(23, jump.address),
+        },
+        .call => |address| encodeOpArg(16, address),
+        .@"return" => encodeOpArg(17, 0),
+        .push => |push| switch (push) {
+            .accumulator => encodeOpArg(18, 0),
+            .address => encodeOpArg(24, 0),
+            else => null,
+        },
+        .pop => |pop| if (pop) |address| encodeOpArg(25, address) else encodeOpArg(19, 0),
+        .load_parameter => |parameter| encodeOpArg(26, parameter),
+    };
+}
+
+fn encodeOpArg(op: Word, arg: Word) Word {
+    return 1000 * op + arg;
+}
+
+test "everything compiles" {
+    std.testing.refAllDecls(@This());
+}
+
+const expectEqual = std.testing.expectEqual;
+
+test decode {
+    try expectEqual(Operation{ .stop = {} }, decode(0).?);
+    try expectEqual(Operation{ .call = 42 }, decode(16042).?);
+    try expectEqual(Operation{ .add = .{ .address = 200 } }, decode(6200).?);
+    try expectEqual(Operation{ .load = .{ .indirect = 140 } }, decode(2140).?);
+    try expectEqual(Operation{ .jump = .{
+        .address = 300,
+        .condition = .greater_or_equal,
+    } }, decode(21300).?);
+    try expectEqual(Operation{ .push = .{ .accumulator = {} } }, decode(18000).?);
+    try expectEqual(@as(?Operation, null), decode(51000));
+}
+
+test encode {}
