@@ -36,17 +36,7 @@ const Address = Arg;
 
 const JmpArgs = struct {
     address: Address,
-    condition: Condition,
-};
-
-const Condition = enum {
-    always,
-    equal,
-    not_equal,
-    greater,
-    less,
-    greater_or_equal,
-    less_or_equal,
+    condition: ?std.math.CompareOperator,
 };
 
 pub fn decode(instruction: Word) ?Operation {
@@ -71,13 +61,13 @@ pub fn decode(instruction: Word) ?Operation {
         12...15, 21...23 => .{ .jump = .{
             .address = arg,
             .condition = switch (opcode) {
-                12 => .always,
-                13 => .greater,
-                14 => .less,
-                15 => .equal,
-                21 => .greater_or_equal,
-                22 => .less_or_equal,
-                23 => .not_equal,
+                12 => null,
+                13 => .gt,
+                14 => .lt,
+                15 => .eq,
+                21 => .gte,
+                22 => .lte,
+                23 => .neq,
                 else => unreachable,
             },
         } },
@@ -159,7 +149,7 @@ test decode {
     try expectEqual(Operation{ .load = .{ .indirect = 140 } }, decode(2140).?);
     try expectEqual(Operation{ .jump = .{
         .address = 300,
-        .condition = .greater_or_equal,
+        .condition = .gte,
     } }, decode(21300).?);
     try expectEqual(Operation{ .push = .{ .accumulator = {} } }, decode(18000).?);
     try expectEqual(@as(?Operation, null), decode(51000));
