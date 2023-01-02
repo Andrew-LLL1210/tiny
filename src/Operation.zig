@@ -1,6 +1,6 @@
 const std = @import("std");
-const Word = @import("Machine.zig").Word;
-const Arg = @import("Machine.zig").Ptr;
+const Word = @import("machine.zig").Word;
+const Arg = @import("machine.zig").Ptr;
 
 const Operation = union(enum) {
     stop,
