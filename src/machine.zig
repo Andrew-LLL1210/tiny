@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
-const Operation = @import("Operation.zig");
+const operation = @import("operation.zig");
 const Reporter = @import("reporter.zig").Reporter;
 
 pub const Word = i24;
@@ -44,7 +44,7 @@ pub const Machine = struct {
         return .{
             .memory = undefined,
             .ip = 0,
-            .acc = undefined,
+            .acc = 0,
             .sp = 900,
             .bp = 900,
             .in = in,
@@ -70,77 +70,56 @@ pub const Machine = struct {
     }
 
     pub fn cycle(self: *Machine) !void {
-        const instruction = Operation.decode(self.memory[self.ip]);
+        const instruction = operation.decode(self.memory[self.ip]) orelse {
+            return error.badErrorMessage;
+        };
         self.ip += 1;
-        return self.executeOperation(instruction);
-    }
-
-    pub fn executeOperation(self: *Machine, operation: Operation) !void {
-        const arg = operation.arg;
-        switch (operation.op) {
+        switch (instruction) {
             .stop => return Exit.Stop,
-            .ld_from => self.acc = (try self.at(arg)).*,
-            .ld_imm, .lda_of => self.acc = arg,
-            .st_to => (try self.at(arg)).* = self.acc,
-            .sti_to => (try self.at((try self.at(arg)).*)).* = self.acc,
-            .add_by => self.acc = self.wrap(self.acc +% (try self.at(arg)).*),
-            .sub_by => self.acc = self.wrap(self.acc -% (try self.at(arg)).*),
-            .mul_by => self.acc = self.wrap(self.acc *% (try self.at(arg)).*),
-            .div_by => self.acc = try self.div(self.acc, (try self.at(arg)).*),
-            .add_imm => self.acc = self.wrap(self.acc +% arg),
-            .sub_imm => self.acc = self.wrap(self.acc -% arg),
-            .mul_imm => self.acc = self.wrap(self.acc *% arg),
-            .div_imm => self.acc = try self.div(self.acc, arg),
-            .ldi_from => self.acc = (try self.at((try self.at(arg)).*)).*,
+            .load => |value| try self.put(.{ .accumulator = {} }, try self.get(value)),
+            .store => |v_adr| try self.put(v_adr, self.acc),
+            .add => |value| self.acc +%= try self.get(value),
+            .subtract => |value| self.acc -%= try self.get(value),
+            .multiply => |value| self.acc *%= try self.get(value),
+            .divide => |value| self.acc = try self.div(self.acc, try self.get(value)),
             .in => self.acc = try self.in.readByte(),
             .out => try self.out.writeByte(@intCast(u8, self.acc)),
-            .jmp_to => self.ip = arg,
-            .je_to => self.conditionalJump(.eq, arg),
-            .jne_to => self.conditionalJump(.neq, arg),
-            .jl_to => self.conditionalJump(.lt, arg),
-            .jle_to => self.conditionalJump(.lte, arg),
-            .jg_to => self.conditionalJump(.gt, arg),
-            .jge_to => self.conditionalJump(.gte, arg),
-            .call => switch (arg) {
+            .jump => |pl| {
+                if (if (pl.condition) |op| std.math.compare(self.acc, op, 0) else true)
+                    self.ip = pl.address;
+            },
+            .call => |adr| switch (adr) {
                 input_integer => try self.inputInteger(),
                 print_integer => try self.printInteger(),
                 input_string => try self.inputString(),
                 print_string => try self.printString(),
                 else => {
-                    if (arg >= 900) return Exit.SegFault;
+                    if (adr >= 900) return Exit.SegFault;
 
                     self.sp -= 1;
                     self.memory[self.sp] = self.ip;
                     self.sp -= 1;
                     self.memory[self.sp] = self.bp;
                     self.bp = self.sp;
-                    self.ip = arg;
+                    self.ip = adr;
                 },
             },
-            .ret => {
+            .@"return" => {
                 self.sp = self.bp;
                 self.bp = @intCast(Ptr, (try self.at(self.sp)).*);
                 self.sp += 1;
                 self.ip = @intCast(Ptr, (try self.at(self.sp)).*);
                 self.sp += 1;
             },
-            .push => try self.push(self.acc),
-            .pop => {
-                self.acc = self.memory[@intCast(Ptr, self.sp)];
+            .push => |value| try self.push(try self.get(value)),
+            .pop => |adr| {
+                const loc: operation.VirtualAddress = if (adr) |addr| .{ .address = addr } else .{ .accumulator = {} };
+                try self.put(loc, self.memory[@intCast(Ptr, self.sp)]);
                 self.sp += 1;
             },
-            .ldparam_no => self.acc = (try self.at(self.bp + arg + 1)).*,
-            .push_from => try self.push((try self.at(arg)).*),
-            .pop_to => {
-                self.memory[arg] = self.memory[@intCast(Ptr, self.sp)];
-                self.sp += 1;
-            },
-            .pusha_of => try self.push(arg),
+            .load_parameter => |no| self.acc = (try self.at(self.bp + no + 1)).*,
         }
-    }
-
-    fn conditionalJump(self: *Machine, op: std.math.CompareOperator, dst: u16) void {
-        if (std.math.compare(self.acc, op, 0)) self.ip = dst;
+        self.acc = self.wrap(self.acc);
     }
 
     fn push(self: *Machine, operand: Word) !void {
@@ -162,6 +141,23 @@ pub const Machine = struct {
             return error.ReportedError;
         }
         return &self.memory[@intCast(Ptr, i)];
+    }
+
+    fn get(self: *Machine, location: operation.Value) !Word {
+        return switch (location) {
+            .accumulator => self.acc,
+            .address => |addr| (try self.at(addr)).*,
+            .indirect => |addr| (try self.at((try self.at(addr)).*)).*,
+            .immediate => |val| val,
+        };
+    }
+
+    fn put(self: *Machine, location: operation.VirtualAddress, value: Word) !void {
+        switch (location) {
+            .accumulator => self.acc = value,
+            .address => |address| (try self.at(address)).* = value,
+            .indirect => |address| (try self.at((try self.at(address)).*)).* = value,
+        }
     }
 
     fn div(self: *Machine, num: Word, den: Word) !Word {
@@ -226,3 +222,7 @@ pub const Machine = struct {
             try self.out.writeByte(@intCast(u8, char));
     }
 };
+
+test "everything compiles" {
+    std.testing.refAllDecls(@This());
+}

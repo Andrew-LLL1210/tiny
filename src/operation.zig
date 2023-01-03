@@ -2,7 +2,7 @@ const std = @import("std");
 const Word = @import("machine.zig").Word;
 const Arg = @import("machine.zig").Ptr;
 
-const Operation = union(enum) {
+pub const Operation = union(enum) {
     stop,
     load: Value,
     store: VirtualAddress,
@@ -20,21 +20,22 @@ const Operation = union(enum) {
     load_parameter: Arg,
 };
 
-const Value = union(enum) {
+pub const Value = union(enum) {
     accumulator,
     immediate: Arg,
     address: Arg,
     indirect: Arg,
 };
 
-const VirtualAddress = union(enum) {
+pub const VirtualAddress = union(enum) {
     address: Arg,
     indirect: Arg,
+    accumulator,
 };
 
-const Address = Arg;
+pub const Address = Arg;
 
-const JmpArgs = struct {
+pub const JmpArgs = struct {
     address: Address,
     condition: ?std.math.CompareOperator,
 };
@@ -83,7 +84,7 @@ pub fn decode(instruction: Word) ?Operation {
     };
 }
 
-fn encode(input: Operation) ?Word {
+pub fn encode(input: Operation) ?Word {
     return switch (input) {
         .stop => encodeOpArg(10, 0),
         .load => |load| switch (load) {
@@ -95,13 +96,15 @@ fn encode(input: Operation) ?Word {
         .store => |store| switch (store) {
             .address => |address| encodeOpArg(4, address),
             .indirect => |address| encodeOpArg(5, address),
+            .accumulator => null,
         },
         .add, .subtract, .multiply, .divide => |op| {
-            const opcode = switch (input) {
+            const opcode: Word = switch (input) {
                 .add => 6,
                 .subtract => 7,
                 .multiply => 8,
                 .divide => 9,
+                else => unreachable,
             };
             return switch (op) {
                 .immediate => |value| encodeOpArg(90 + opcode, value),
@@ -111,15 +114,14 @@ fn encode(input: Operation) ?Word {
         },
         .in => encodeOpArg(10, 0),
         .out => encodeOpArg(11, 0),
-        .jump => |jump| switch (jump.condition) {
-            .always => encodeOpArg(12, jump.address),
-            .greater => encodeOpArg(13, jump.address),
-            .less => encodeOpArg(14, jump.address),
-            .equal => encodeOpArg(15, jump.address),
-            .greater_or_equal => encodeOpArg(21, jump.address),
-            .less_or_equal => encodeOpArg(22, jump.address),
-            .not_equal => encodeOpArg(23, jump.address),
-        },
+        .jump => |jump| if (jump.condition) |condition| switch (condition) {
+            .gt => encodeOpArg(13, jump.address),
+            .lt => encodeOpArg(14, jump.address),
+            .eq => encodeOpArg(15, jump.address),
+            .gte => encodeOpArg(21, jump.address),
+            .lte => encodeOpArg(22, jump.address),
+            .neq => encodeOpArg(23, jump.address),
+        } else encodeOpArg(12, jump.address),
         .call => |address| encodeOpArg(16, address),
         .@"return" => encodeOpArg(17, 0),
         .push => |push| switch (push) {
@@ -132,7 +134,7 @@ fn encode(input: Operation) ?Word {
     };
 }
 
-fn encodeOpArg(op: Word, arg: Word) Word {
+pub fn encodeOpArg(op: Word, arg: Word) Word {
     return 1000 * op + arg;
 }
 

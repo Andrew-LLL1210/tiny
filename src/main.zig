@@ -8,9 +8,9 @@ const Word = u24;
 
 const tiny = @import("tiny.zig");
 const Reporter = @import("reporter.zig").Reporter;
-const Operation = @import("Operation.zig");
+const operation = @import("operation.zig");
 const Listing = tiny.listing;
-const Machine = @import("Machine.zig");
+const Machine = @import("machine.zig").Machine;
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
