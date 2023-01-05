@@ -35,7 +35,7 @@ const SecondPassData = struct {
     line_no: usize,
     mnemonic: Mnemonic,
     label_arg: []const u8,
-    destination: *?Word,
+    destination: usize,
 };
 
 /// read tiny source code and produce a listing
@@ -96,7 +96,8 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             .instruction_2 => |data| {
                 var snd_pass_data = data;
                 snd_pass_data.line_no = reporter.line;
-                snd_pass_data.destination = try listing.addOne();
+                snd_pass_data.destination = listing.items.len;
+                _ = try listing.addOne();
                 try postponed.append(snd_pass_data);
             },
         };
@@ -108,7 +109,7 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             try reporter.report(.line, .err, "unknown label '{s}'", .{ data.line_no, data.label_arg });
             return error.ReportedError;
         };
-        data.destination.* = try encodeInstruction(data.mnemonic, .{ .adr = label.addr });
+        listing.items[data.destination] = try encodeInstruction(data.mnemonic, .{ .adr = label.addr });
     }
 
     return listing.toOwnedSlice();
