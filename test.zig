@@ -85,6 +85,11 @@ test "fail to assemble" {
         "test/parse1.tny",
         "\x1b[97mfile:1:9: \x1b[91merror:\x1b[97m unexpected character 'a'\x1b[0m\n",
     );
+
+    try expectFailureFromFile(
+        "test/unknown-instruction.tny",
+        "\x1b[97mfile:1:8: \x1b[91merror:\x1b[97m unknown operation or directive 'do'\x1b[0m\n",
+    );
 }
 
 test "produce listing" {

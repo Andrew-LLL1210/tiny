@@ -84,23 +84,24 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             }
         }
 
-        const col_no = 0; //@ptrToInt(@ptrCast(*const u8, parts.op orelse rline)) - @ptrToInt(@ptrCast(*const u8, rline));
-
-        if (parts.op) |op| switch (try firstPass(op, parts.argument, reporter, col_no)) {
-            .define_characters => |string| {
-                for (string) |char| try listing.append(char);
-                try listing.append(0);
-            },
-            .define_byte, .instruction_1 => |word| try listing.append(word),
-            .define_storage => |size| try listing.appendNTimes(null, size),
-            .instruction_2 => |data| {
-                var snd_pass_data = data;
-                snd_pass_data.line_no = reporter.line;
-                snd_pass_data.destination = listing.items.len;
-                _ = try listing.addOne();
-                try postponed.append(snd_pass_data);
-            },
-        };
+        if (parts.op) |op| {
+            const col_no = (mem.indexOf(u8, rline, op) orelse unreachable) + 1;
+            switch (try firstPass(op, parts.argument, reporter, col_no)) {
+                .define_characters => |string| {
+                    for (string) |char| try listing.append(char);
+                    try listing.append(0);
+                },
+                .define_byte, .instruction_1 => |word| try listing.append(word),
+                .define_storage => |size| try listing.appendNTimes(null, size),
+                .instruction_2 => |data| {
+                    var snd_pass_data = data;
+                    snd_pass_data.line_no = reporter.line;
+                    snd_pass_data.destination = listing.items.len;
+                    _ = try listing.addOne();
+                    try postponed.append(snd_pass_data);
+                },
+            }
+        }
     }
 
     // second pass
@@ -162,7 +163,7 @@ pub fn firstPass(
 
     // not a directive
     const mnemonic = Mnemonic.fromString(op) orelse {
-        try reporter.report(.col, .err, "unrecognized operation or directive {s}", .{ col_no, op });
+        try reporter.report(.col, .err, "unknown operation or directive '{s}'", .{ col_no, op });
         return error.ReportedError;
     };
 
