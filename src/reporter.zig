@@ -1,12 +1,13 @@
 const eqlIgnoreCase = @import("std").ascii.eqlIgnoreCase;
 
-pub fn Reporter(comptime WriterT: type) type {
+pub fn Reporter(comptime Writer: type) type {
     return struct {
         const Self = @This();
 
         line: usize = 0,
+        col: usize = 0,
         path: []const u8,
-        writer: WriterT,
+        writer: Writer,
 
         pub const ReportType = enum {
             err,
@@ -69,6 +70,17 @@ pub fn Reporter(comptime WriterT: type) type {
                 layout.tag() ++ sev_tag ++ message ++ "\x1b[0m\n",
                 loc_args ++ args,
             );
+        }
+
+        pub fn reportAndExit(
+            self: Self,
+            comptime layout: ReportLayout,
+            comptime severity: ReportType,
+            comptime message: []const u8,
+            args: anytype,
+        ) (Writer.Error || error{ReportedError}) {
+            try self.report(layout, severity, message, args);
+            return error.ReportedError;
         }
 
         pub fn reportDuplicateLabel(
