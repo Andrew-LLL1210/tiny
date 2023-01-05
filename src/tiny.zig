@@ -140,10 +140,27 @@ pub fn firstPass(
 ) !FirstPassData {
     if (eqlIgnoreCase(op, "db")) {
         // argument must be an integer from -99999 to 99999
-        const word = try std.fmt.parseInt(
-            Word,
-            argument orelse return error.badErrorMessage,
-            10,
+        const arg = argument orelse {
+            try reporter.report(.col, .err, "expected an argument", .{col_no});
+            return reporter.reportAndExit(
+                .col,
+                .note,
+                "'db' directive requires a number from -99999 to 99999",
+                .{col_no},
+            );
+        };
+        const word = std.fmt.parseInt(Word, arg, 10) catch |err| switch (err) {
+            error.InvalidCharacter => {
+                return reporter.reportAndExit(.col, .err, "DB directive requires a number from -99999 to 99999; found {s}", .{
+                    col_no,
+                });
+            },
+        };
+        if (word > 99999 or word < -99999) return reporter.reportAndExit(
+            .col,
+            .err,
+            "DB directive requires a number from -99999 to 99999; {d} is out of range",
+            .{ col_no, word },
         );
         return .{ .define_byte = word };
     }

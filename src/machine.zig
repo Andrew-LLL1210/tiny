@@ -70,9 +70,9 @@ pub const Machine = struct {
     }
 
     pub fn cycle(self: *Machine) !void {
-        const instruction = operation.decode(self.memory[self.ip]) orelse {
-            return error.badErrorMessage;
-        };
+        const instruction = operation.decode(self.memory[self.ip]) orelse
+            return self.reporter.reportAndExit(.bare, .err, "cannot decode instruction pointer into an instruction: {d} at memory address {d}", .{ self.memory[self.ip], self.ip });
+
         self.ip += 1;
         switch (instruction) {
             .stop => return Exit.Stop,
