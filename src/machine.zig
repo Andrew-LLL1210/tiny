@@ -4,7 +4,6 @@ const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const operation = @import("operation.zig");
-const Reporter = @import("reporter.zig").Reporter;
 
 pub const Word = i24;
 pub const Ptr = u16;
@@ -33,13 +32,11 @@ pub const Machine = struct {
     in: Reader,
     out: Writer,
     err: Writer,
-    reporter: *Reporter(Writer),
 
     pub fn init(
         in: Reader,
         out: Writer,
         err: Writer,
-        reporter: *Reporter(Writer),
     ) Machine {
         return .{
             .memory = undefined,
@@ -50,7 +47,6 @@ pub const Machine = struct {
             .in = in,
             .out = out,
             .err = err,
-            .reporter = reporter,
         };
     }
 
@@ -70,8 +66,7 @@ pub const Machine = struct {
     }
 
     pub fn cycle(self: *Machine) !void {
-        const instruction = operation.decode(self.memory[self.ip]) orelse
-            return self.reporter.reportAndExit(.bare, .err, "cannot decode instruction pointer into an instruction: {d} at memory address {d}", .{ self.memory[self.ip], self.ip });
+        const instruction = try operation.decode(self.memory[self.ip]);
 
         self.ip += 1;
         switch (instruction) {
@@ -81,7 +76,7 @@ pub const Machine = struct {
             .add => |value| self.acc +%= try self.get(value),
             .subtract => |value| self.acc -%= try self.get(value),
             .multiply => |value| self.acc *%= try self.get(value),
-            .divide => |value| self.acc = try self.div(self.acc, try self.get(value)),
+            .divide => |value| self.acc = try div(self.acc, try self.get(value)),
             .in => self.acc = try self.in.readByte(),
             .out => try self.out.writeByte(@intCast(u8, self.acc)),
             .jump => |pl| {
@@ -119,7 +114,7 @@ pub const Machine = struct {
             },
             .load_parameter => |no| self.acc = (try self.at(self.bp + no + 1)).*,
         }
-        self.acc = self.wrap(self.acc);
+        self.acc = wrap(self.acc);
     }
 
     fn push(self: *Machine, operand: Word) !void {
@@ -128,18 +123,14 @@ pub const Machine = struct {
         (try self.at(self.sp)).* = operand;
     }
 
-    fn wrap(self: *Machine, n: Word) Word {
+    fn wrap(n: Word) Word {
         const res = @mod(n + 99999, 199999) - 99999;
-        if (res != n)
-            self.reporter.report(.bare, .warning, "overflow: {d} -> {d}", .{ n, res }) catch {};
+        if (res != n) {} // TODO warn overflow
         return res;
     }
 
     fn at(self: *Machine, i: Word) !*Word {
-        if (i < 0 or i >= 900) {
-            try self.reporter.report(.bare, .err, "invalid memory access at address {d}", .{i});
-            return error.ReportedError;
-        }
+        if (i < 0 or i >= 900) return error.InvalidAdress;
         return &self.memory[@intCast(Ptr, i)];
     }
 
@@ -160,11 +151,8 @@ pub const Machine = struct {
         }
     }
 
-    fn div(self: *Machine, num: Word, den: Word) !Word {
-        if (den == 0) {
-            try self.reporter.report(.bare, .err, "division by zero", .{});
-            return error.ReportedError;
-        }
+    fn div(num: Word, den: Word) !Word {
+        if (den == 0) return error.DivideByZero;
         return @divTrunc(num, den);
     }
 
@@ -173,23 +161,16 @@ pub const Machine = struct {
     fn inputInteger(self: *Machine) !void {
         var buf: [100]u8 = undefined;
         const rline = try self.in.readUntilDelimiterOrEof(&buf, '\n') orelse {
-            try self.reporter.report(.bare, .err, "eof found while reading integer", .{});
-            return error.ReportedError;
+            return error.UnexpectedEof;
         };
         const line = std.mem.trim(u8, rline, " \t\r\n");
-        self.acc = self.wrap(std.fmt.parseInt(Word, line, 10) catch |err| switch (err) {
-            error.InvalidCharacter => if (line.len == 0) {
-                try self.reporter.report(.bare, .err, "blank line found while reading integer", .{});
-                return error.ReportedError;
-            } else {
-                try self.reporter.report(.bare, .err, "invalid character found while reading integer", .{});
-                return error.ReportedError;
-            },
+        self.acc = wrap(std.fmt.parseInt(Word, line, 10) catch |err| switch (err) {
+            error.InvalidCharacter => return err,
             error.Overflow => if (line[0] == '-') blk: {
-                try self.reporter.report(.bare, .warning, "input too large to parse, using -99999", .{});
+                // TODO warn
                 break :blk -99999;
             } else blk: {
-                try self.reporter.report(.bare, .warning, "input too large to parse, using 99999", .{});
+                // TODO warn
                 break :blk 99999;
             },
         });

@@ -40,8 +40,9 @@ pub const JmpArgs = struct {
     condition: ?std.math.CompareOperator,
 };
 
-pub fn decode(instruction: Word) ?Operation {
-    if (instruction < 0 or instruction > 99999) return null;
+const DecodeError = error{ CannotDecode, WordOutOfRange };
+pub fn decode(instruction: Word) DecodeError!Operation {
+    if (instruction < 0 or instruction > 99999) return DecodeError.WordOutOfRange;
     const positive = @intCast(u24, instruction);
     const opcode = positive / 1000;
     const arg = @truncate(Arg, positive % 1000);
@@ -80,57 +81,7 @@ pub fn decode(instruction: Word) ?Operation {
         24 => .{ .push = .{ .address = arg } },
         25 => .{ .pop = arg },
         26 => .{ .push = .{ .immediate = arg } },
-        else => null,
-    };
-}
-
-pub fn encode(input: Operation) ?Word {
-    return switch (input) {
-        .stop => encodeOpArg(10, 0),
-        .load => |load| switch (load) {
-            .address => |address| encodeOpArg(1, address),
-            .immediate => |value| encodeOpArg(2, value),
-            .indirect => |address| encodeOpArg(3, address),
-            .accumulator => null,
-        },
-        .store => |store| switch (store) {
-            .address => |address| encodeOpArg(4, address),
-            .indirect => |address| encodeOpArg(5, address),
-            .accumulator => null,
-        },
-        .add, .subtract, .multiply, .divide => |op| {
-            const opcode: Word = switch (input) {
-                .add => 6,
-                .subtract => 7,
-                .multiply => 8,
-                .divide => 9,
-                else => unreachable,
-            };
-            return switch (op) {
-                .immediate => |value| encodeOpArg(90 + opcode, value),
-                .address => |address| encodeOpArg(opcode, address),
-                else => null,
-            };
-        },
-        .in => encodeOpArg(10, 0),
-        .out => encodeOpArg(11, 0),
-        .jump => |jump| if (jump.condition) |condition| switch (condition) {
-            .gt => encodeOpArg(13, jump.address),
-            .lt => encodeOpArg(14, jump.address),
-            .eq => encodeOpArg(15, jump.address),
-            .gte => encodeOpArg(21, jump.address),
-            .lte => encodeOpArg(22, jump.address),
-            .neq => encodeOpArg(23, jump.address),
-        } else encodeOpArg(12, jump.address),
-        .call => |address| encodeOpArg(16, address),
-        .@"return" => encodeOpArg(17, 0),
-        .push => |push| switch (push) {
-            .accumulator => encodeOpArg(18, 0),
-            .address => encodeOpArg(24, 0),
-            else => null,
-        },
-        .pop => |pop| if (pop) |address| encodeOpArg(25, address) else encodeOpArg(19, 0),
-        .load_parameter => |parameter| encodeOpArg(26, parameter),
+        else => DecodeError.CannotDecode,
     };
 }
 
@@ -156,5 +107,3 @@ test decode {
     try expectEqual(Operation{ .push = .{ .accumulator = {} } }, decode(18000).?);
     try expectEqual(@as(?Operation, null), decode(51000));
 }
-
-test encode {}

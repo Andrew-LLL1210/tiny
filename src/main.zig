@@ -7,7 +7,6 @@ const Writer = std.fs.File.Writer;
 const Word = u24;
 
 const tiny = @import("tiny.zig");
-const Reporter = @import("reporter.zig").Reporter;
 const operation = @import("operation.zig");
 const Listing = tiny.listing;
 const Machine = @import("machine.zig").Machine;
@@ -56,27 +55,16 @@ pub fn run(
     };
     defer alloc.free(filepath);
 
-    var reporter = Reporter(Writer){
-        .path = filepath,
-        .writer = stderr,
-    };
-
     var file = try std.fs.openFileAbsolute(filepath, .{});
     const fin = file.reader();
     defer file.close();
 
-    const listing = tiny.readSource(fin, alloc, &reporter) catch |err| switch (err) {
-        error.ReportedError => return,
-        else => return err,
-    };
+    const listing = try tiny.readSource(fin, alloc);
     defer alloc.free(listing);
 
-    var machine = Machine.init(stdin, stdout, stderr, &reporter);
+    var machine = Machine.init(stdin, stdout, stderr);
     machine.loadListing(listing);
-    machine.run() catch |err| switch (err) {
-        error.ReportedError => return,
-        else => return err,
-    };
+    try machine.run();
 }
 
 const msg = struct {

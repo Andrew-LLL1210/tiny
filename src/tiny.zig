@@ -16,7 +16,6 @@ const Machine = machine.Machine;
 const Word = machine.Word;
 const Ptr = machine.Ptr;
 const Listing = machine.Listing;
-const Reporter = @import("reporter.zig").Reporter;
 const eql = mem.eql;
 const Argument = machine.Ptr;
 const Address = machine.Ptr;
@@ -29,17 +28,30 @@ const AssemblyError = error{
     InvalidSourceInstruction,
 };
 
-const LabelTable = HashMap([]const u8, LabelData, CaseInsensitiveContext, 80);
-
 const SecondPassData = struct {
-    line_no: usize,
     mnemonic: Mnemonic,
     label_arg: []const u8,
     destination: usize,
 };
 
+pub const Parts = struct {
+    label: ?[]const u8,
+    op: ?[]const u8,
+    argument: ?[]const u8,
+};
+
+const FirstPassData = union(enum) {
+    define_byte: Word,
+    define_characters: []const u8,
+    define_storage: usize,
+    instruction_1: Word,
+    instruction_2: SecondPassData,
+};
+
+const LabelTable = HashMap([]const u8, LabelData, CaseInsensitiveContext, 80);
+
 /// read tiny source code and produce a listing
-pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
+pub fn readSource(in: anytype, alloc: Allocator) !Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
@@ -65,10 +77,9 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
     defer arena.deinit();
 
     // get all labels and directives
-    while (try in.readUntilDelimiterOrEofAlloc(alloc, '\n', 200)) |rline| {
-        defer alloc.free(rline);
-        reporter.line += 1;
-        const parts = try separateParts(rline, line_alloc, reporter);
+    while (try in.readUntilDelimiterOrEofAlloc(alloc, '\n', 200)) |line| {
+        defer alloc.free(line);
+        const parts = try separateParts(line, line_alloc);
 
         if (parts.label) |label_name| {
             // TODO check if label is valid
@@ -76,17 +87,12 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
             // put label address in label_table if not duplicate
             const addr = @truncate(Address, listing.items.len);
             const kv = try label_table.getOrPut(label_name);
-            if (kv.found_existing) {
-                try reporter.reportDuplicateLabel(label_name, kv.value_ptr.line_no, kv.value_ptr.addr >= 900);
-                return error.ReportedError;
-            } else {
-                kv.value_ptr.* = LabelData.init(label_name, reporter.line, addr);
-            }
+            if (kv.found_existing) return AssemblyError.DuplicateLabel;
+            kv.value_ptr.* = LabelData.init(label_name, addr);
         }
 
         if (parts.op) |op| {
-            const col_no = (mem.indexOf(u8, rline, op) orelse unreachable) + 1;
-            switch (try firstPass(op, parts.argument, reporter, col_no)) {
+            switch (try firstPass(op, parts.argument)) {
                 .define_characters => |string| {
                     for (string) |char| try listing.append(char);
                     try listing.append(0);
@@ -95,7 +101,6 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
                 .define_storage => |size| try listing.appendNTimes(null, size),
                 .instruction_2 => |data| {
                     var snd_pass_data = data;
-                    snd_pass_data.line_no = reporter.line;
                     snd_pass_data.destination = listing.items.len;
                     _ = try listing.addOne();
                     try postponed.append(snd_pass_data);
@@ -106,83 +111,40 @@ pub fn readSource(in: anytype, alloc: Allocator, reporter: anytype) !Listing {
 
     // second pass
     for (postponed.items) |data| {
-        const label = label_table.get(data.label_arg) orelse {
-            try reporter.report(.line, .err, "unknown label '{s}'", .{ data.line_no, data.label_arg });
-            return error.ReportedError;
-        };
+        const label = label_table.get(data.label_arg) orelse return AssemblyError.UnknownLabel;
         listing.items[data.destination] = try encodeInstruction(data.mnemonic, .{ .adr = label.addr });
     }
 
     return listing.toOwnedSlice();
 }
 
-pub const Parts = struct {
-    label: ?[]const u8,
-    op: ?[]const u8,
-    argument: ?[]const u8,
-};
-
-const FirstPassData = union(enum) {
-    define_byte: Word,
-    define_characters: []const u8,
-    define_storage: usize,
-    instruction_1: Word,
-    instruction_2: SecondPassData,
-};
-
-pub const ParserState = enum(usize) { s0, lb, s1, s2, op, s3, ar, st, es, s4, xx, oo };
-
 pub fn firstPass(
     op: []const u8,
     argument: ?[]const u8,
-    reporter: anytype,
-    col_no: usize,
 ) !FirstPassData {
     if (eqlIgnoreCase(op, "db")) {
         // argument must be an integer from -99999 to 99999
-        const arg = argument orelse {
-            try reporter.report(.col, .err, "expected an argument", .{col_no});
-            return reporter.reportAndExit(
-                .col,
-                .note,
-                "'db' directive requires a number from -99999 to 99999",
-                .{col_no},
-            );
-        };
-        const word = std.fmt.parseInt(Word, arg, 10) catch |err| switch (err) {
-            error.InvalidCharacter => {
-                return reporter.reportAndExit(.col, .err, "DB directive requires a number from -99999 to 99999; found {s}", .{
-                    col_no,
-                });
-            },
-        };
-        if (word > 99999 or word < -99999) return reporter.reportAndExit(
-            .col,
-            .err,
-            "DB directive requires a number from -99999 to 99999; {d} is out of range",
-            .{ col_no, word },
-        );
+        const arg = argument orelse return error.ExpectedAgument;
+        const word = try std.fmt.parseInt(Word, arg, 10);
+        if (word > 99999 or word < -99999) return error.OutOfRange;
         return .{ .define_byte = word };
     }
 
     if (eqlIgnoreCase(op, "ds")) {
-        // argument must be a positive integer
-        const n = try std.fmt.parseInt(
-            usize,
-            argument orelse return error.badErrorMessage,
-            10,
-        );
+        // argument must be an integer in range [0, 999]
+        const arg = argument orelse return error.ExpectedAgument;
+        const n = try std.fmt.parseInt(usize, arg, 10);
+        if (n > 999) return error.OutOfRange;
         return .{ .define_storage = n };
     }
 
-    if (eqlIgnoreCase(op, "dc"))
-        return .{ .define_characters = (argument orelse return error.badErrorMessage)[0 .. argument.?.len - 1] };
+    if (eqlIgnoreCase(op, "dc")) {
+        const arg = argument orelse return error.ExpectedAgument;
+        return .{ .define_characters = arg[0 .. argument.?.len - 1] };
+    }
 
     // not a directive
-    const mnemonic = Mnemonic.fromString(op) orelse {
-        try reporter.report(.col, .err, "unknown operation or directive '{s}'", .{ col_no, op });
-        return error.ReportedError;
-    };
+    const mnemonic = Mnemonic.fromString(op) orelse return error.UnknownInstruction;
 
     const arg = argument orelse return .{
         .instruction_1 = try encodeInstruction(mnemonic, .{ .nil = {} }),
@@ -194,20 +156,21 @@ pub fn firstPass(
             .instruction_1 = try encodeInstruction(mnemonic, .{ .imm = number }),
         };
     } else |err| switch (err) {
-        error.Overflow => return error.badErrorMessage,
+        error.Overflow => return err,
         error.InvalidCharacter => return .{
             // for now assume argument is a label
             .instruction_2 = .{
                 .mnemonic = mnemonic,
                 .label_arg = arg,
-                .line_no = undefined,
                 .destination = undefined,
             },
         },
     }
 }
 
-pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Parts {
+pub const ParserState = enum(usize) { s0, lb, s1, s2, op, s3, ar, st, es, s4, xx, oo };
+
+pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
     var label_or_op = ArrayList(u8).init(alloc);
     var op = ArrayList(u8).init(alloc);
     var arg = ArrayList(u8).init(alloc);
@@ -215,7 +178,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Par
 
     var state: ParserState = .s0;
 
-    for (line) |char, i| {
+    for (line) |char| {
         if (char == '\r') break;
         if (state == .st and char != '\\') try arg.append(char);
         if (state == .es) try arg.append(switch (char) {
@@ -225,10 +188,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Par
 
         // Tabularized implementation of an FSA
         const state_transition: [10]ParserState = switch (char) {
-            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => {
-                try reporter.report(.col, .err, "bad byte {X:0>2}", .{ i + 1, char });
-                return error.ReportedError;
-            },
+            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => return error.BadByte,
             ' ', '\t' => .{ .s0, .s1, .s1, .s2, .s3, .s3, .s4, .st, .st, .s4 },
             ':' => .{ .xx, .s2, .s2, .xx, .xx, .xx, .xx, .st, .st, .xx },
             '"' => .{ .xx, .st, .st, .xx, .st, .st, .xx, .s4, .st, .xx },
@@ -238,10 +198,7 @@ pub fn separateParts(line: []const u8, alloc: Allocator, reporter: anytype) !Par
         };
 
         state = state_transition[@enumToInt(state)];
-        if (state == .xx) {
-            try reporter.report(.col, .err, "unexpected character '{c}'", .{ i + 1, char });
-            return error.ReportedError;
-        }
+        if (state == .xx) return error.UnexpectedCharacter;
         if (state == .oo) break;
 
         if (state == .s2) is_label = true;
@@ -264,23 +221,20 @@ fn wrapNull(src: []const u8) ?[]const u8 {
 
 const LabelData = struct {
     name: []const u8,
-    line_no: usize,
     addr: u16,
 
     fn init(
         name: []const u8,
-        line_no: usize,
         addr: u16,
     ) LabelData {
         return .{
             .name = name,
-            .line_no = line_no,
             .addr = addr,
         };
     }
 
     fn initRom(name: []const u8, i: usize) LabelData {
-        return init(name, 0, @truncate(Ptr, 900 + 25 * i));
+        return init(name, @truncate(Ptr, 900 + 25 * i));
     }
 };
 
