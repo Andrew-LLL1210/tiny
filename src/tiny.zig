@@ -22,24 +22,30 @@ const Address = machine.Ptr;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 const encodeOpArg = operation.encodeOpArg;
 
-const AssemblyError = error{
-    DuplicateLabel,
-    UnknownLabel,
-    InvalidSourceInstruction,
+pub fn Result(comptime T: type) type {
+    return union(enum) {
+        Ok: T,
+        Err: AssemblyError,
+    };
+}
+pub const AssemblyError = union(enum) {
+    DuplicateLabel: struct { name: []const u8, line1: usize, line2: usize },
+    ReservedLabel: struct { name: []const u8, line: usize },
+    UnknownLabel: struct { name: []const u8, line: usize },
+    InvalidSourceInstruction: struct { instruction: []const u8, line: usize },
+    BadByte: u8,
+    UnexpectedCharacter: u8,
 };
-
 const SecondPassData = struct {
     mnemonic: Mnemonic,
     label_arg: []const u8,
     destination: usize,
 };
-
 pub const Parts = struct {
     label: ?[]const u8,
     op: ?[]const u8,
     argument: ?[]const u8,
 };
-
 const FirstPassData = union(enum) {
     define_byte: Word,
     define_characters: []const u8,
@@ -47,11 +53,54 @@ const FirstPassData = union(enum) {
     instruction_1: Word,
     instruction_2: SecondPassData,
 };
+const LabelData = struct {
+    name: []const u8,
+    addr: u16,
+
+    fn init(
+        name: []const u8,
+        addr: u16,
+    ) LabelData {
+        return .{
+            .name = name,
+            .addr = addr,
+        };
+    }
+
+    fn initRom(name: []const u8, i: usize) LabelData {
+        return init(name, @truncate(Ptr, 900 + 25 * i));
+    }
+};
+const CaseInsensitiveContext = struct {
+    pub fn hash(_: @This(), key: []const u8) u64 {
+        // case insensitive hashing
+        var wh = std.hash.Wyhash.init(0);
+        for (key) |char| {
+            if (ascii.isLower(char)) {
+                const e = char - ('a' - 'A');
+                wh.update(mem.asBytes(&e));
+            } else {
+                wh.update(mem.asBytes(&char));
+            }
+        }
+        return wh.final();
+    }
+
+    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
+        return eqlIgnoreCase(a, b);
+    }
+};
+const OpData = union(enum) {
+    nil,
+    imm: Argument,
+    adr: Address,
+};
 
 const LabelTable = HashMap([]const u8, LabelData, CaseInsensitiveContext, 80);
 
-/// read tiny source code and produce a listing
-pub fn readSource(in: anytype, alloc: Allocator) !Listing {
+/// read tiny source code and produce a listing or failure diagnosic
+/// Errors on faults unrelated to program, i.e. OutOfMemory
+pub fn readSource(src: []const u8, alloc: Allocator) !Result(Listing) {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
@@ -71,15 +120,13 @@ pub fn readSource(in: anytype, alloc: Allocator) !Listing {
     var postponed = ArrayList(SecondPassData).init(alloc);
     defer postponed.deinit();
 
-    // holds the lines because we need them to last
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    const line_alloc = arena.allocator();
-    defer arena.deinit();
-
     // get all labels and directives
-    while (try in.readUntilDelimiterOrEofAlloc(alloc, '\n', 200)) |line| {
-        defer alloc.free(line);
-        const parts = try separateParts(line, line_alloc);
+    var it = mem.split(u8, src, "\n");
+    while (it.next()) |line| {
+        const parts = switch (separateParts(line)) {
+            .Ok => |p| p,
+            .Err => |err| return .{ .Err = err },
+        };
 
         if (parts.label) |label_name| {
             // TODO check if label is valid
@@ -87,7 +134,11 @@ pub fn readSource(in: anytype, alloc: Allocator) !Listing {
             // put label address in label_table if not duplicate
             const addr = @truncate(Address, listing.items.len);
             const kv = try label_table.getOrPut(label_name);
-            if (kv.found_existing) return AssemblyError.DuplicateLabel;
+            if (kv.found_existing) return .{ .Err = .{ .DuplicateLabel = .{
+                .name = label_name,
+                .line1 = undefined,
+                .line2 = undefined,
+            } } };
             kv.value_ptr.* = LabelData.init(label_name, addr);
         }
 
@@ -111,11 +162,14 @@ pub fn readSource(in: anytype, alloc: Allocator) !Listing {
 
     // second pass
     for (postponed.items) |data| {
-        const label = label_table.get(data.label_arg) orelse return AssemblyError.UnknownLabel;
+        const label = label_table.get(data.label_arg) orelse return .{ .Err = .{ .UnknownLabel = .{
+            .name = data.label_arg,
+            .line = undefined,
+        } } };
         listing.items[data.destination] = try encodeInstruction(data.mnemonic, .{ .adr = label.addr });
     }
 
-    return listing.toOwnedSlice();
+    return .{ .Ok = listing.toOwnedSlice() };
 }
 
 pub fn firstPass(
@@ -170,25 +224,43 @@ pub fn firstPass(
 
 pub const ParserState = enum(usize) { s0, lb, s1, s2, op, s3, ar, st, es, s4, xx, oo };
 
-pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
-    var label_or_op = ArrayList(u8).init(alloc);
-    var op = ArrayList(u8).init(alloc);
-    var arg = ArrayList(u8).init(alloc);
+const IxPair = struct {
+    start: usize = 0,
+    end: usize = 0,
+
+    fn slice(self: IxPair, src: []const u8) []const u8 {
+        return src[self.start..self.end];
+    }
+
+    fn extend(self: IxPair) IxPair {
+        return .{ .start = self.start, .end = self.end + 1 };
+    }
+
+    fn init(i: usize, len: usize) IxPair {
+        return .{ .start = i, .end = i + len };
+    }
+
+    fn extendOrInit(x: ?IxPair, i: usize, len: usize) IxPair {
+        return if (x) |self| self.extend() else IxPair.init(i, len);
+    }
+};
+
+pub fn separateParts(line: []const u8) Result(Parts) {
+    var label_or_op: ?IxPair = null;
+    var op: ?IxPair = null;
+    var arg: ?IxPair = null;
     var is_label: bool = false;
 
     var state: ParserState = .s0;
 
-    for (line) |char| {
+    for (line) |char, i| {
         if (char == '\r') break;
-        if (state == .st and char != '\\') try arg.append(char);
-        if (state == .es) try arg.append(switch (char) {
-            'n' => '\n',
-            else => char,
-        });
+        if (state == .st and char != '\\') arg = IxPair.extendOrInit(arg, i, 1);
+        if (state == .es) arg = IxPair.extendOrInit(arg, i, 1);
 
         // Tabularized implementation of an FSA
         const state_transition: [10]ParserState = switch (char) {
-            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => return error.BadByte,
+            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => return .{ .Err = .{ .BadByte = char } },
             ' ', '\t' => .{ .s0, .s1, .s1, .s2, .s3, .s3, .s4, .st, .st, .s4 },
             ':' => .{ .xx, .s2, .s2, .xx, .xx, .xx, .xx, .st, .st, .xx },
             '"' => .{ .xx, .st, .st, .xx, .st, .st, .xx, .s4, .st, .xx },
@@ -198,71 +270,26 @@ pub fn separateParts(line: []const u8, alloc: Allocator) !Parts {
         };
 
         state = state_transition[@enumToInt(state)];
-        if (state == .xx) return error.UnexpectedCharacter;
+        if (state == .xx) return .{ .Err = .{ .UnexpectedCharacter = char } };
         if (state == .oo) break;
 
         if (state == .s2) is_label = true;
 
-        if (state == .lb) try label_or_op.append(char);
-        if (state == .op) try op.append(char);
-        if (state == .ar) try arg.append(char);
+        if (state == .lb) label_or_op = IxPair.extendOrInit(label_or_op, i, 1);
+        if (state == .op) op = IxPair.extendOrInit(op, i, 1);
+        if (state == .ar) arg = IxPair.extendOrInit(arg, i, 1);
     }
 
-    return .{
-        .label = if (is_label) wrapNull(label_or_op.toOwnedSlice()) else null,
-        .op = wrapNull(if (is_label) op.toOwnedSlice() else label_or_op.toOwnedSlice()),
-        .argument = wrapNull(arg.toOwnedSlice()),
-    };
+    return .{ .Ok = .{
+        .label = if (is_label) (if (label_or_op) |label| label.slice(line) else null) else null,
+        .op = if (if (is_label) op else label_or_op) |opix| opix.slice(line) else null,
+        .argument = if (arg) |argix| argix.slice(line) else null,
+    } };
 }
 
 fn wrapNull(src: []const u8) ?[]const u8 {
     return if (src.len > 0) src else null;
 }
-
-const LabelData = struct {
-    name: []const u8,
-    addr: u16,
-
-    fn init(
-        name: []const u8,
-        addr: u16,
-    ) LabelData {
-        return .{
-            .name = name,
-            .addr = addr,
-        };
-    }
-
-    fn initRom(name: []const u8, i: usize) LabelData {
-        return init(name, @truncate(Ptr, 900 + 25 * i));
-    }
-};
-
-const CaseInsensitiveContext = struct {
-    pub fn hash(_: @This(), key: []const u8) u64 {
-        // case insensitive hashing
-        var wh = std.hash.Wyhash.init(0);
-        for (key) |char| {
-            if (ascii.isLower(char)) {
-                const e = char - ('a' - 'A');
-                wh.update(mem.asBytes(&e));
-            } else {
-                wh.update(mem.asBytes(&char));
-            }
-        }
-        return wh.final();
-    }
-
-    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
-        return eqlIgnoreCase(a, b);
-    }
-};
-
-const OpData = union(enum) {
-    nil,
-    imm: Argument,
-    adr: Address,
-};
 
 const activeTag = std.meta.activeTag;
 pub fn encodeInstruction(mnemonic: Mnemonic, op: OpData) !Word {

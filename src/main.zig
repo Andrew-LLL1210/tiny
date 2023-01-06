@@ -8,8 +8,9 @@ const Word = u24;
 
 const tiny = @import("tiny.zig");
 const operation = @import("operation.zig");
-const Listing = tiny.listing;
+const AssemblyResult = tiny.Result(Listing);
 const Machine = @import("machine.zig").Machine;
+const Listing = @import("machine.zig").Listing;
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -55,16 +56,38 @@ pub fn run(
     };
     defer alloc.free(filepath);
 
-    var file = try std.fs.openFileAbsolute(filepath, .{});
-    const fin = file.reader();
-    defer file.close();
+    const src = blk: {
+        var file = try std.fs.openFileAbsolute(filepath, .{});
+        const fin = file.reader();
+        defer file.close();
 
-    const listing = try tiny.readSource(fin, alloc);
+        break :blk try fin.readAllAlloc(alloc, 20_000);
+    };
+    defer alloc.free(src);
+
+    const listing = try handle(try tiny.readSource(src, alloc), filepath, stderr) orelse return;
     defer alloc.free(listing);
 
     var machine = Machine.init(stdin, stdout, stderr);
     machine.loadListing(listing);
     try machine.run();
+}
+
+fn handle(result: AssemblyResult, f: []const u8, w: Writer) !?Listing {
+    if (result == .Ok) return result.Ok;
+
+    switch (result.Err) {
+        .DuplicateLabel => |e| {
+            try errorWrite(w, f, e.line2, null, msg.duplicate_label, .{e.name});
+            try errorWrite(w, f, e.line1, null, msg.duplicate_label_note, .{});
+        },
+        .ReservedLabel => @panic("ReservedLabel"),
+        .UnknownLabel => @panic("UnknownLabel"),
+        .InvalidSourceInstruction => @panic("InvalidSourceInstruction"),
+        .BadByte => @panic("BadByte"),
+        .UnexpectedCharacter => @panic("UnexpectedCharacter"),
+    }
+    return null;
 }
 
 const msg = struct {
@@ -76,7 +99,25 @@ const msg = struct {
         \\
     ;
 
-    const no_filename = "\x1b[91merror:\x1b[97m no file provided\x1b[0m\n";
-    const not_command = "\x1b[91merror:\x1b[97m '{s}' is not a command\x1b[0m\n";
-    const file_not_found = "\x1b[91merror:\x1b[97m file not found: '{s}'\x1b[0m\n";
+    const b = "\x1b[91m";
+    const endl = "\x1b[0m\n";
+    const err = "\x1b[91merror:\x1b[97m ";
+    const note = "\x1b[96mnote:\x1b[97m ";
+    const warning = "\x1b[91mwarning:\x1b[97m ";
+
+    // CLI errors
+    const no_filename = err ++ "no file provided" ++ endl;
+    const not_command = err ++ "'{s}' is not a command" ++ endl;
+    const file_not_found = err ++ "file not found: '{s}'" ++ endl;
+
+    // Assembly errors
+    const duplicate_label = err ++ "duplicate label '{s}'";
+    const duplicate_label_note = note ++ "original label here";
 };
+
+fn errorWrite(writer: Writer, filename: []const u8, line: usize, col: ?usize, comptime message: []const u8, args: anytype) !void {
+    try writer.print("\x1b[91m{s}:{d}:", .{ filename, line });
+    if (col) |c| try writer.print("{d}: ", .{c}) else try writer.writeAll(" ");
+    try writer.print(message, args);
+    try writer.writeAll(msg.endl);
+}
