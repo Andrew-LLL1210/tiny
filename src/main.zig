@@ -7,10 +7,11 @@ const Writer = std.fs.File.Writer;
 const Word = u24;
 
 const tiny = @import("tiny.zig");
-const Reporter = @import("reporter.zig").Reporter;
-const Operation = @import("Operation.zig");
-const Listing = tiny.listing;
-const Machine = @import("Machine.zig");
+const operation = @import("operation.zig");
+const Diagnostic = @import("Diagnostic.zig");
+const AssemblyError = tiny.AssemblyError;
+const Machine = @import("machine.zig").Machine;
+const Listing = @import("machine.zig").Listing;
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
@@ -56,30 +57,30 @@ pub fn run(
     };
     defer alloc.free(filepath);
 
-    var reporter = Reporter(Writer){
-        .path = filepath,
-        .writer = stderr,
+    const src = blk: {
+        var file = try std.fs.openFileAbsolute(filepath, .{});
+        const fin = file.reader();
+        defer file.close();
+
+        break :blk try fin.readAllAlloc(alloc, 20_000);
     };
+    defer alloc.free(src);
 
-    var file = try std.fs.openFileAbsolute(filepath, .{});
-    const fin = file.reader();
-    defer file.close();
-
-    const listing = tiny.readSource(fin, alloc, &reporter) catch |err| switch (err) {
-        error.ReportedError => return,
-        else => return err,
+    var diagnostic: Diagnostic = undefined;
+    diagnostic.filepath = filepath;
+    diagnostic.stderr = stderr;
+    const listing: Listing = tiny.readSource(src, alloc, &diagnostic) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => |e| return diagnostic.printErrorMessage(e),
     };
     defer alloc.free(listing);
 
-    var machine = Machine.init(stdin, stdout, stderr, &reporter);
+    var machine = Machine.init(stdin, stdout, stderr);
     machine.loadListing(listing);
-    machine.run() catch |err| switch (err) {
-        error.ReportedError => return,
-        else => return err,
-    };
+    try machine.run();
 }
 
-const msg = struct {
+pub const msg = struct {
     const usage =
         \\
         \\tiny run [file]   - build and run a tiny program
@@ -88,7 +89,32 @@ const msg = struct {
         \\
     ;
 
-    const no_filename = "\x1b[91merror:\x1b[97m no file provided\x1b[0m\n";
-    const not_command = "\x1b[91merror:\x1b[97m '{s}' is not a command\x1b[0m\n";
-    const file_not_found = "\x1b[91merror:\x1b[97m file not found: '{s}'\x1b[0m\n";
+    pub const b = "\x1b[91m";
+    pub const endl = "\x1b[0m\n";
+    pub const err = "\x1b[91merror:\x1b[97m ";
+    pub const note = "\x1b[96mnote:\x1b[97m ";
+    pub const warning = "\x1b[93mwarning:\x1b[97m ";
+
+    // CLI errors
+    pub const no_filename = err ++ "no file provided" ++ endl;
+    pub const not_command = err ++ "'{s}' is not a command" ++ endl;
+    pub const file_not_found = err ++ "file not found: '{s}'" ++ endl;
+
+    // Assembly errors
+    pub const duplicate_label = "duplicate label '{s}'";
+    pub const duplicate_label_note = "original label here";
+    pub const reserved_label = "'{s}' is a reserved label name";
+    pub const unknown_label = "unknown label '{s}'";
+    pub const unknown_instruction = "unknown instruction '{s}'";
+    pub const bad_byte = "unexpected byte with ASCII value {d}";
+    pub const db_range_note = "'db' expects an integer in the range -99999 to 99999";
+    pub const ds_range_note = "the argument for 'ds' must be small enough to fit in the machine";
+    pub const ds_range_note2 = "the machine has 900 memory cells, so the argument should be (much) lower than this";
+    pub const argument_range_note = "numeric arguments must be in the range 0 to 999";
+    pub const unexpected_character = "unexpected character '{c}'";
+    pub const dislikes_immediate = "'{s}' expects a label (or nothing) for its argument";
+    pub const dislikes_operand = "'{s}' does not take an argument";
+    pub const requires_label = "'{s}' expects a label for its argument";
+    pub const directive_expected_agument = "'{s}' directive expects an argument";
+    pub const out_of_range = "'{s}' is out of range";
 };
