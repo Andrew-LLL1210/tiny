@@ -21,17 +21,8 @@ const Argument = machine.Ptr;
 const Address = machine.Ptr;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 const encodeOpArg = operation.encodeOpArg;
+const Diagnostic = @import("Diagnostic.zig");
 
-pub const Diagnostic = struct {
-    filepath: []const u8,
-    label_name: []const u8,
-    label_prior_line: usize,
-    instruction: []const u8,
-    line: usize,
-    byte: u8,
-    op: []const u8,
-    argument: []const u8,
-};
 pub const AssemblyError = error{
     DuplicateLabel,
     ReservedLabel,
@@ -46,6 +37,7 @@ pub const AssemblyError = error{
     RequiresLabel,
     DirectiveExpectedAgument,
     DbOutOfRange,
+    DbBadArgType,
     DsOutOfRange,
     ArgumentOutOfRange,
 };
@@ -120,7 +112,7 @@ const ReadSourceError = Allocator.Error || AssemblyError;
 /// read tiny source code and produce a listing or failure diagnostic
 /// Errors on faults unrelated to program, i.e. OutOfMemory
 /// diagnosic is an out parameter
-pub fn readSource(src: []const u8, alloc: Allocator, diagnostic: *Diagnostic) ReadSourceError!Listing {
+pub fn parseListing(src: []const u8, alloc: Allocator, diagnostic: *Diagnostic) ReadSourceError!Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
@@ -185,6 +177,7 @@ pub fn readSource(src: []const u8, alloc: Allocator, diagnostic: *Diagnostic) Re
             diagnostic.line = data.line_no;
             return error.UnknownLabel;
         };
+        diagnostic.op = data.mnemonic.toString();
         listing.items[data.destination] = try encodeInstruction(data.mnemonic, .{ .adr = label.addr });
     }
 
@@ -202,7 +195,10 @@ pub fn firstPass(
     if (eqlIgnoreCase(op, "db")) {
         // argument must be an integer from -99999 to 99999
         const arg = argument orelse return error.DirectiveExpectedAgument;
-        const word = std.fmt.parseInt(Word, arg, 10) catch return error.DbOutOfRange;
+        const word = std.fmt.parseInt(Word, arg, 10) catch |err| switch (err) {
+            error.InvalidCharacter => return error.DbBadArgType,
+            error.Overflow => return error.DbOutOfRange,
+        };
         if (word > 99999 or word < -99999) return error.DbOutOfRange;
         return .{ .define_byte = word };
     }
@@ -211,7 +207,7 @@ pub fn firstPass(
         // argument must be an integer in range [0, 999]
         const arg = argument orelse return error.DirectiveExpectedAgument;
         const n = std.fmt.parseInt(usize, arg, 10) catch return error.DsOutOfRange;
-        if (n > 999) return error.DsOutOfRange;
+        if (n > 900) return error.DsOutOfRange;
         return .{ .define_storage = n };
     }
 
@@ -229,6 +225,7 @@ pub fn firstPass(
 
     // determine whether argument is a number or label
     if (std.fmt.parseInt(Argument, arg, 10)) |number| {
+        if (number < 0 or number > 999) return error.ArgumentOutOfRange;
         return .{
             .instruction_1 = try encodeInstruction(mnemonic, .{ .imm = number }),
         };
@@ -433,6 +430,36 @@ const Mnemonic = enum {
         if (eqlIgnoreCase(src, "ldparam")) return .ldparam;
         if (eqlIgnoreCase(src, "pusha")) return .pusha;
         return null;
+    }
+
+    pub fn toString(self: Mnemonic) []const u8 {
+        return switch (self) {
+            .stop => "stop",
+            .ld => "ld",
+            .ldi => "ldi",
+            .lda => "lda",
+            .st => "st",
+            .sti => "sti",
+            .add => "add",
+            .sub => "sub",
+            .mul => "mul",
+            .div => "div",
+            .in => "in",
+            .out => "out",
+            .jmp => "jmp",
+            .jg => "jg",
+            .jl => "jl",
+            .je => "je",
+            .jge => "jge",
+            .jle => "jle",
+            .jne => "jne",
+            .call => "call",
+            .ret => "ret",
+            .push => "push",
+            .pop => "pop",
+            .ldparam => "ldparam",
+            .pusha => "pusha",
+        };
     }
 };
 

@@ -94,16 +94,17 @@ test "everything compiles" {
 }
 
 const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
 
 test decode {
-    try expectEqual(Operation{ .stop = {} }, decode(0).?);
-    try expectEqual(Operation{ .call = 42 }, decode(16042).?);
-    try expectEqual(Operation{ .add = .{ .address = 200 } }, decode(6200).?);
-    try expectEqual(Operation{ .load = .{ .indirect = 140 } }, decode(2140).?);
+    try expectEqual(Operation{ .stop = {} }, try decode(0));
+    try expectEqual(Operation{ .call = 42 }, try decode(16042));
+    try expectEqual(Operation{ .add = .{ .address = 200 } }, try decode(6200));
+    try expectEqual(Operation{ .load = .{ .indirect = 140 } }, try decode(2140));
     try expectEqual(Operation{ .jump = .{
         .address = 300,
         .condition = .gte,
-    } }, decode(21300).?);
-    try expectEqual(Operation{ .push = .{ .accumulator = {} } }, decode(18000).?);
-    try expectEqual(@as(?Operation, null), decode(51000));
+    } }, try decode(21300));
+    try expectEqual(Operation{ .push = .{ .accumulator = {} } }, try decode(18000));
+    try expectError(error.CannotDecode, decode(51000));
 }
