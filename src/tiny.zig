@@ -22,26 +22,34 @@ const Address = machine.Ptr;
 const eqlIgnoreCase = std.ascii.eqlIgnoreCase;
 const encodeOpArg = operation.encodeOpArg;
 
-pub fn Result(comptime T: type) type {
-    return union(enum) {
-        Ok: T,
-        Err: AssemblyError,
-    };
-}
-pub const AssemblyError = union(enum) {
-    DuplicateLabel: struct { name: []const u8, line1: usize, line2: usize },
-    ReservedLabel: struct { name: []const u8, line: usize },
-    UnknownLabel: struct { name: []const u8, line: usize },
-    InvalidSourceInstruction: struct { instruction: []const u8, line: usize },
-    BadByte: u8,
-    UnexpectedCharacter: u8,
+pub const Diagnostic = struct {
+    filepath: []const u8,
+    label_name: []const u8,
+    label_prior_line: usize,
+    instruction: []const u8,
+    line: usize,
+    byte: u8,
+    op: []const u8,
+    argument: []const u8,
 };
-const SecondPassData = struct {
-    mnemonic: Mnemonic,
-    label_arg: []const u8,
-    destination: usize,
+pub const AssemblyError = error{
+    DuplicateLabel,
+    ReservedLabel,
+    UnknownLabel,
+    UnknownInstruction,
+    BadByte,
+    UnexpectedCharacter,
+    DislikesImmediate,
+    DislikesOperand,
+    NeedsImmediate,
+    NeedsOperand,
+    RequiresLabel,
+    DirectiveExpectedAgument,
+    DbOutOfRange,
+    DsOutOfRange,
+    ArgumentOutOfRange,
 };
-pub const Parts = struct {
+const Parts = struct {
     label: ?[]const u8,
     op: ?[]const u8,
     argument: ?[]const u8,
@@ -53,22 +61,31 @@ const FirstPassData = union(enum) {
     instruction_1: Word,
     instruction_2: SecondPassData,
 };
+const SecondPassData = struct {
+    line_no: usize,
+    mnemonic: Mnemonic,
+    label_arg: []const u8,
+    destination: usize,
+};
 const LabelData = struct {
     name: []const u8,
+    line_no: usize,
     addr: u16,
 
     fn init(
         name: []const u8,
+        line_no: usize,
         addr: u16,
     ) LabelData {
         return .{
             .name = name,
+            .line_no = line_no,
             .addr = addr,
         };
     }
 
     fn initRom(name: []const u8, i: usize) LabelData {
-        return init(name, @truncate(Ptr, 900 + 25 * i));
+        return init(name, 0, @truncate(Ptr, 900 + 25 * i));
     }
 };
 const CaseInsensitiveContext = struct {
@@ -98,9 +115,12 @@ const OpData = union(enum) {
 
 const LabelTable = HashMap([]const u8, LabelData, CaseInsensitiveContext, 80);
 
-/// read tiny source code and produce a listing or failure diagnosic
+const ReadSourceError = Allocator.Error || AssemblyError;
+
+/// read tiny source code and produce a listing or failure diagnostic
 /// Errors on faults unrelated to program, i.e. OutOfMemory
-pub fn readSource(src: []const u8, alloc: Allocator) !Result(Listing) {
+/// diagnosic is an out parameter
+pub fn readSource(src: []const u8, alloc: Allocator, diagnostic: *Diagnostic) ReadSourceError!Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);
     errdefer listing.deinit();
@@ -122,11 +142,10 @@ pub fn readSource(src: []const u8, alloc: Allocator) !Result(Listing) {
 
     // get all labels and directives
     var it = mem.split(u8, src, "\n");
-    while (it.next()) |line| {
-        const parts = switch (separateParts(line)) {
-            .Ok => |p| p,
-            .Err => |err| return .{ .Err = err },
-        };
+    var line_no: usize = 1;
+    while (it.next()) |line| : (line_no += 1) {
+        diagnostic.line = line_no;
+        const parts = try separateParts(line, diagnostic);
 
         if (parts.label) |label_name| {
             // TODO check if label is valid
@@ -134,67 +153,71 @@ pub fn readSource(src: []const u8, alloc: Allocator) !Result(Listing) {
             // put label address in label_table if not duplicate
             const addr = @truncate(Address, listing.items.len);
             const kv = try label_table.getOrPut(label_name);
-            if (kv.found_existing) return .{ .Err = .{ .DuplicateLabel = .{
-                .name = label_name,
-                .line1 = undefined,
-                .line2 = undefined,
-            } } };
-            kv.value_ptr.* = LabelData.init(label_name, addr);
+            if (kv.found_existing) {
+                diagnostic.label_name = kv.value_ptr.name;
+                diagnostic.label_prior_line = kv.value_ptr.line_no;
+                return if (kv.value_ptr.addr >= 900) error.ReservedLabel else error.DuplicateLabel;
+            }
+            kv.value_ptr.* = LabelData.init(label_name, line_no, addr);
         }
 
-        if (parts.op) |op| {
-            switch (try firstPass(op, parts.argument)) {
-                .define_characters => |string| {
-                    for (string) |char| try listing.append(char);
-                    try listing.append(0);
-                },
-                .define_byte, .instruction_1 => |word| try listing.append(word),
-                .define_storage => |size| try listing.appendNTimes(null, size),
-                .instruction_2 => |data| {
-                    var snd_pass_data = data;
-                    snd_pass_data.destination = listing.items.len;
-                    _ = try listing.addOne();
-                    try postponed.append(snd_pass_data);
-                },
-            }
-        }
+        if (parts.op) |op| switch (try firstPass(op, parts.argument, diagnostic)) {
+            .define_characters => |string| {
+                for (string) |char| try listing.append(char);
+                try listing.append(0);
+            },
+            .define_byte, .instruction_1 => |word| try listing.append(word),
+            .define_storage => |size| try listing.appendNTimes(null, size),
+            .instruction_2 => |data| {
+                var snd_pass_data = data;
+                snd_pass_data.destination = listing.items.len;
+                snd_pass_data.line_no = line_no;
+                _ = try listing.addOne();
+                try postponed.append(snd_pass_data);
+            },
+        };
     }
 
     // second pass
     for (postponed.items) |data| {
-        const label = label_table.get(data.label_arg) orelse return .{ .Err = .{ .UnknownLabel = .{
-            .name = data.label_arg,
-            .line = undefined,
-        } } };
+        const label = label_table.get(data.label_arg) orelse {
+            diagnostic.label_name = data.label_arg;
+            diagnostic.line = data.line_no;
+            return error.UnknownLabel;
+        };
         listing.items[data.destination] = try encodeInstruction(data.mnemonic, .{ .adr = label.addr });
     }
 
-    return .{ .Ok = listing.toOwnedSlice() };
+    return listing.toOwnedSlice();
 }
 
 pub fn firstPass(
     op: []const u8,
     argument: ?[]const u8,
-) !FirstPassData {
+    diagnostic: *Diagnostic,
+) AssemblyError!FirstPassData {
+    diagnostic.op = op;
+    if (argument) |arg| diagnostic.argument = arg;
+
     if (eqlIgnoreCase(op, "db")) {
         // argument must be an integer from -99999 to 99999
-        const arg = argument orelse return error.ExpectedAgument;
-        const word = try std.fmt.parseInt(Word, arg, 10);
-        if (word > 99999 or word < -99999) return error.OutOfRange;
+        const arg = argument orelse return error.DirectiveExpectedAgument;
+        const word = std.fmt.parseInt(Word, arg, 10) catch return error.DbOutOfRange;
+        if (word > 99999 or word < -99999) return error.DbOutOfRange;
         return .{ .define_byte = word };
     }
 
     if (eqlIgnoreCase(op, "ds")) {
         // argument must be an integer in range [0, 999]
-        const arg = argument orelse return error.ExpectedAgument;
-        const n = try std.fmt.parseInt(usize, arg, 10);
-        if (n > 999) return error.OutOfRange;
+        const arg = argument orelse return error.DirectiveExpectedAgument;
+        const n = std.fmt.parseInt(usize, arg, 10) catch return error.DsOutOfRange;
+        if (n > 999) return error.DsOutOfRange;
         return .{ .define_storage = n };
     }
 
     if (eqlIgnoreCase(op, "dc")) {
-        const arg = argument orelse return error.ExpectedAgument;
-        return .{ .define_characters = arg[0 .. argument.?.len - 1] };
+        const arg = argument orelse return error.DirectiveExpectedAgument;
+        return .{ .define_characters = arg[0..] };
     }
 
     // not a directive
@@ -210,13 +233,14 @@ pub fn firstPass(
             .instruction_1 = try encodeInstruction(mnemonic, .{ .imm = number }),
         };
     } else |err| switch (err) {
-        error.Overflow => return err,
+        error.Overflow => return error.ArgumentOutOfRange,
         error.InvalidCharacter => return .{
-            // for now assume argument is a label
+            // TODO for now assume argument is a label
             .instruction_2 = .{
                 .mnemonic = mnemonic,
                 .label_arg = arg,
                 .destination = undefined,
+                .line_no = undefined,
             },
         },
     }
@@ -245,7 +269,7 @@ const IxPair = struct {
     }
 };
 
-pub fn separateParts(line: []const u8) Result(Parts) {
+pub fn separateParts(line: []const u8, diagnostic: *Diagnostic) AssemblyError!Parts {
     var label_or_op: ?IxPair = null;
     var op: ?IxPair = null;
     var arg: ?IxPair = null;
@@ -260,7 +284,10 @@ pub fn separateParts(line: []const u8) Result(Parts) {
 
         // Tabularized implementation of an FSA
         const state_transition: [10]ParserState = switch (char) {
-            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => return .{ .Err = .{ .BadByte = char } },
+            '\x00'...'\x08', '\x0a'...'\x1f', '\x7f'...'\xff' => {
+                diagnostic.byte = char;
+                return error.BadByte;
+            },
             ' ', '\t' => .{ .s0, .s1, .s1, .s2, .s3, .s3, .s4, .st, .st, .s4 },
             ':' => .{ .xx, .s2, .s2, .xx, .xx, .xx, .xx, .st, .st, .xx },
             '"' => .{ .xx, .st, .st, .xx, .st, .st, .xx, .s4, .st, .xx },
@@ -270,7 +297,10 @@ pub fn separateParts(line: []const u8) Result(Parts) {
         };
 
         state = state_transition[@enumToInt(state)];
-        if (state == .xx) return .{ .Err = .{ .UnexpectedCharacter = char } };
+        if (state == .xx) {
+            diagnostic.byte = char;
+            return error.UnexpectedCharacter;
+        }
         if (state == .oo) break;
 
         if (state == .s2) is_label = true;
@@ -280,11 +310,11 @@ pub fn separateParts(line: []const u8) Result(Parts) {
         if (state == .ar) arg = IxPair.extendOrInit(arg, i, 1);
     }
 
-    return .{ .Ok = .{
+    return .{
         .label = if (is_label) (if (label_or_op) |label| label.slice(line) else null) else null,
         .op = if (if (is_label) op else label_or_op) |opix| opix.slice(line) else null,
         .argument = if (arg) |argix| argix.slice(line) else null,
-    } };
+    };
 }
 
 fn wrapNull(src: []const u8) ?[]const u8 {

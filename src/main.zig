@@ -8,7 +8,8 @@ const Word = u24;
 
 const tiny = @import("tiny.zig");
 const operation = @import("operation.zig");
-const AssemblyResult = tiny.Result(Listing);
+const Diagnostic = tiny.Diagnostic;
+const AssemblyError = tiny.AssemblyError;
 const Machine = @import("machine.zig").Machine;
 const Listing = @import("machine.zig").Listing;
 
@@ -65,7 +66,12 @@ pub fn run(
     };
     defer alloc.free(src);
 
-    const listing = try handle(try tiny.readSource(src, alloc), filepath, stderr) orelse return;
+    var diagnostic: Diagnostic = undefined;
+    diagnostic.filepath = filepath;
+    const listing: Listing = tiny.readSource(src, alloc, &diagnostic) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => |e| return handle(e, diagnostic, stderr),
+    };
     defer alloc.free(listing);
 
     var machine = Machine.init(stdin, stdout, stderr);
@@ -73,21 +79,37 @@ pub fn run(
     try machine.run();
 }
 
-fn handle(result: AssemblyResult, f: []const u8, w: Writer) !?Listing {
-    if (result == .Ok) return result.Ok;
-
-    switch (result.Err) {
-        .DuplicateLabel => |e| {
-            try errorWrite(w, f, e.line2, null, msg.duplicate_label, .{e.name});
-            try errorWrite(w, f, e.line1, null, msg.duplicate_label_note, .{});
+fn handle(err: AssemblyError, info: Diagnostic, writer: Writer) !void {
+    const closure = (struct {
+        w: Writer,
+        i: Diagnostic,
+        fn write(self: @This(), comptime message: []const u8, args: anytype) !void {
+            return errorWrite(self.w, self.i.filepath, self.i.line, null, message, args);
+        }
+    }{ .w = writer, .i = info });
+    switch (err) {
+        error.DuplicateLabel => {
+            try closure.write(msg.duplicate_label, .{info.label_name});
+            try errorWrite(writer, info.filepath, info.label_prior_line, null, msg.duplicate_label_note, .{});
         },
-        .ReservedLabel => @panic("ReservedLabel"),
-        .UnknownLabel => @panic("UnknownLabel"),
-        .InvalidSourceInstruction => @panic("InvalidSourceInstruction"),
-        .BadByte => @panic("BadByte"),
-        .UnexpectedCharacter => @panic("UnexpectedCharacter"),
+        error.ReservedLabel => try closure.write(msg.reserved_label, .{info.label_name}),
+        error.UnknownLabel => try closure.write(msg.unknown_label, .{info.label_name}),
+        error.UnknownInstruction => try closure.write(msg.unknown_instruction, .{info.op}),
+        error.BadByte => try closure.write(msg.bad_byte, .{info.byte}),
+        error.UnexpectedCharacter => return err,
+        error.DislikesImmediate => return err,
+        error.DislikesOperand => return err,
+        error.NeedsImmediate => {
+            try closure.write(msg.err ++ "'{s}' instruction requires an immediate value as its operand", .{info.op});
+            try closure.write(msg.argument_range_note, .{});
+        },
+        error.NeedsOperand => try closure.write("\x1b[91merror:\x1b[97m '{s}' instruction requires an operand", .{info.op}),
+        error.RequiresLabel => return err,
+        error.DirectiveExpectedAgument => return err,
+        error.ArgumentOutOfRange => return err,
+        error.DbOutOfRange => return err,
+        error.DsOutOfRange => return err,
     }
-    return null;
 }
 
 const msg = struct {
@@ -103,7 +125,7 @@ const msg = struct {
     const endl = "\x1b[0m\n";
     const err = "\x1b[91merror:\x1b[97m ";
     const note = "\x1b[96mnote:\x1b[97m ";
-    const warning = "\x1b[91mwarning:\x1b[97m ";
+    const warning = "\x1b[93mwarning:\x1b[97m ";
 
     // CLI errors
     const no_filename = err ++ "no file provided" ++ endl;
@@ -113,10 +135,16 @@ const msg = struct {
     // Assembly errors
     const duplicate_label = err ++ "duplicate label '{s}'";
     const duplicate_label_note = note ++ "original label here";
+    const reserved_label = err ++ "'{s}' is a reserved label name";
+    const unknown_label = err ++ "unknown label '{s}'";
+    const unknown_instruction = err ++ "unknown instruction '{s}'";
+    const bad_byte = err ++ "bad byte {d}";
+    const db_range_note = note ++ "'db' expects an integer in the range -99999 to 99999";
+    const argument_range_note = note ++ "tiny allows only numeric arguments in the range 0 to 999";
 };
 
 fn errorWrite(writer: Writer, filename: []const u8, line: usize, col: ?usize, comptime message: []const u8, args: anytype) !void {
-    try writer.print("\x1b[91m{s}:{d}:", .{ filename, line });
+    try writer.print("\x1b[97m{s}:{d}:", .{ filename, line });
     if (col) |c| try writer.print("{d}: ", .{c}) else try writer.writeAll(" ");
     try writer.print(message, args);
     try writer.writeAll(msg.endl);
