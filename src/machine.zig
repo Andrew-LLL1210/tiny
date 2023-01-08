@@ -4,10 +4,24 @@ const ArrayList = std.ArrayList;
 const Reader = std.fs.File.Reader;
 const Writer = std.fs.File.Writer;
 const operation = @import("operation.zig");
+const Diagnostic = @import("Diagnostic.zig");
 
 pub const Word = i24;
 pub const Ptr = u16;
 pub const Listing = []const ?Word;
+
+pub const RuntimeError = error{
+    Overflow,
+    InputIntegerTooSmall,
+    InputIntegerTooLarge,
+    CannotDecode,
+    WordOutOfRange,
+    SegFault,
+    InvalidAdress,
+    DivideByZero,
+    InvalidCharacter,
+    EndOfStream,
+};
 
 pub fn writeListing(listing: Listing, out: Writer) !void {
     for (listing) |word| if (word) |data| {
@@ -31,12 +45,12 @@ pub const Machine = struct {
 
     in: Reader,
     out: Writer,
-    err: Writer,
+    diagnostic: *Diagnostic,
 
     pub fn init(
         in: Reader,
         out: Writer,
-        err: Writer,
+        diagnostic: *Diagnostic,
     ) Machine {
         return .{
             .memory = undefined,
@@ -46,7 +60,7 @@ pub const Machine = struct {
             .bp = 900,
             .in = in,
             .out = out,
-            .err = err,
+            .diagnostic = diagnostic,
         };
     }
 
@@ -114,7 +128,7 @@ pub const Machine = struct {
             },
             .load_parameter => |no| self.acc = (try self.at(self.bp + no + 1)).*,
         }
-        self.acc = wrap(self.acc);
+        self.acc = self.wrap(self.acc);
     }
 
     fn push(self: *Machine, operand: Word) !void {
@@ -123,14 +137,21 @@ pub const Machine = struct {
         (try self.at(self.sp)).* = operand;
     }
 
-    fn wrap(n: Word) Word {
+    fn wrap(self: *Machine, n: Word) Word {
         const res = @mod(n + 99999, 199999) - 99999;
-        if (res != n) {} // TODO warn overflow
+        if (res != n) {
+            self.diagnostic.large_int = n;
+            self.diagnostic.overflowed_int = res;
+            self.diagnostic.printRuntimeErrorMessage(error.Overflow, self) catch {};
+        }
         return res;
     }
 
     fn at(self: *Machine, i: Word) !*Word {
-        if (i < 0 or i >= 900) return error.InvalidAdress;
+        if (i < 0 or i >= 900) {
+            self.diagnostic.address = i;
+            return error.InvalidAdress;
+        }
         return &self.memory[@intCast(Ptr, i)];
     }
 
@@ -164,13 +185,13 @@ pub const Machine = struct {
             return error.UnexpectedEof;
         };
         const line = std.mem.trim(u8, rline, " \t\r\n");
-        self.acc = wrap(std.fmt.parseInt(Word, line, 10) catch |err| switch (err) {
+        self.acc = self.wrap(std.fmt.parseInt(Word, line, 10) catch |err| switch (err) {
             error.InvalidCharacter => return err,
             error.Overflow => if (line[0] == '-') blk: {
-                // TODO warn
+                self.diagnostic.printRuntimeErrorMessage(error.InputIntegerTooSmall, self) catch {};
                 break :blk -99999;
             } else blk: {
-                // TODO warn
+                self.diagnostic.printRuntimeErrorMessage(error.InputIntegerTooLarge, self) catch {};
                 break :blk 99999;
             },
         });

@@ -1,7 +1,11 @@
 const Diagnostic = @This();
 const AssemblyError = @import("tiny.zig").AssemblyError;
+const RuntimeError = @import("machine.zig").RuntimeError;
 const Writer = @import("std").fs.File.Writer;
 const msg = @import("main.zig").msg;
+const Word = @import("machine.zig").Word;
+const Ptr = @import("machine.zig").Ptr;
+const Machine = @import("machine.zig").Machine;
 
 stderr: Writer,
 filepath: []const u8,
@@ -14,7 +18,11 @@ byte: u8,
 op: []const u8,
 argument: []const u8,
 
-pub fn printErrorMessage(self: *const Diagnostic, err: AssemblyError) !void {
+large_int: Word,
+overflowed_int: Word,
+address: Word,
+
+pub fn printAssemblyErrorMessage(self: *const Diagnostic, err: AssemblyError) !void {
     switch (err) {
         error.DuplicateLabel => {
             try self.writeError(msg.duplicate_label, .{self.label_name});
@@ -48,6 +56,24 @@ pub fn printErrorMessage(self: *const Diagnostic, err: AssemblyError) !void {
     }
 }
 
+pub fn printRuntimeErrorMessage(self: *const Diagnostic, err: RuntimeError, m: *const Machine) !void {
+    switch (err) {
+        error.Overflow => try self.writeWarning("overflow: {d} -> {d}", .{ self.large_int, self.overflowed_int }),
+        error.CannotDecode => try self.writeCrash(msg.cannot_decode, .{
+            m.memory[m.ip],
+            m.ip,
+        }),
+        error.DivideByZero => try self.writeCrash(msg.divide_by_zero, .{}),
+        error.EndOfStream => try self.writeCrash(msg.end_of_stream, .{}),
+        error.InputIntegerTooLarge => try self.writeWarning(msg.input_integer_too_large, .{}),
+        error.InputIntegerTooSmall => try self.writeWarning(msg.input_integer_too_small, .{}),
+        error.InvalidCharacter => try self.writeCrash(msg.invalid_character, .{}),
+        error.InvalidAdress => try self.writeCrash(msg.invalid_adress, .{self.address}),
+        error.SegFault => unreachable,
+        error.WordOutOfRange => unreachable,
+    }
+}
+
 fn writeError(self: *const Diagnostic, comptime message: []const u8, args: anytype) !void {
     try self.stderr.print("\x1b[97m{s}:{d}: ", .{ self.filepath, self.line });
     try self.stderr.print(msg.err ++ message, args);
@@ -57,5 +83,15 @@ fn writeError(self: *const Diagnostic, comptime message: []const u8, args: anyty
 fn writeNote(self: *const Diagnostic, comptime message: []const u8, args: anytype, alt_line: ?usize) !void {
     try self.stderr.print("\x1b[97m{s}:{d}: ", .{ self.filepath, alt_line orelse self.line });
     try self.stderr.print(msg.note ++ message, args);
+    try self.stderr.writeAll(msg.endl);
+}
+
+fn writeCrash(self: *const Diagnostic, comptime message: []const u8, args: anytype) !void {
+    try self.stderr.print(msg.err ++ message, args);
+    try self.stderr.writeAll(msg.endl);
+}
+
+fn writeWarning(self: *const Diagnostic, comptime message: []const u8, args: anytype) !void {
+    try self.stderr.print(msg.warning ++ message, args);
     try self.stderr.writeAll(msg.endl);
 }

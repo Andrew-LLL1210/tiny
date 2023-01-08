@@ -71,13 +71,34 @@ pub fn run(
     diagnostic.stderr = stderr;
     const listing: Listing = tiny.parseListing(src, alloc, &diagnostic) catch |err| switch (err) {
         error.OutOfMemory => return err,
-        else => |e| return diagnostic.printErrorMessage(e),
+        else => |e| return diagnostic.printAssemblyErrorMessage(e),
     };
     defer alloc.free(listing);
 
-    var machine = Machine.init(stdin, stdout, stderr);
+    var machine = Machine.init(stdin, stdout, &diagnostic);
     machine.loadListing(listing);
-    try machine.run();
+    machine.run() catch |err| switch (err) {
+        error.Stop => unreachable,
+        error.AccessDenied => return err,
+        error.BrokenPipe => return err,
+        error.ConnectionResetByPeer => return err,
+        error.DiskQuota => return err,
+        error.FileTooBig => return err,
+        error.InputOutput => return err,
+        error.LockViolation => return err,
+        error.NoSpaceLeft => return err,
+        error.NotOpenForWriting => return err,
+        error.OperationAborted => return err,
+        error.SystemResources => return err,
+        error.Unexpected => return err,
+        error.WouldBlock => return err,
+        error.UnexpectedEof => return err,
+        error.StreamTooLong => return err,
+        error.ConnectionTimedOut => return err,
+        error.IsDir => return err,
+        error.NotOpenForReading => return err,
+        else => |e| return diagnostic.printRuntimeErrorMessage(e, &machine),
+    };
 }
 
 pub const msg = struct {
@@ -117,6 +138,15 @@ pub const msg = struct {
     pub const requires_label = "'{s}' expects a label for its argument";
     pub const directive_expected_agument = "'{s}' directive expects an argument";
     pub const out_of_range = "'{s}' is out of range";
+
+    // Runtime warnings and errors
+    pub const cannot_decode = "cannot decode word {d} into an instruction at address {d}";
+    pub const divide_by_zero = "divide by zero";
+    pub const end_of_stream = "end of stream";
+    pub const input_integer_too_large = "integer from input too large; truncating to 99999";
+    pub const input_integer_too_small = "integer from input too small; truncating to -99999";
+    pub const invalid_character = "invalid character";
+    pub const invalid_adress = "attempt to read address {d} which does not exist";
 };
 
 test "everything compiles" {
