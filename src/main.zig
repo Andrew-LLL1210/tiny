@@ -13,6 +13,9 @@ const AssemblyError = tiny.AssemblyError;
 const Machine = @import("machine.zig").Machine;
 const Listing = @import("machine.zig").Listing;
 
+const test_module = @import("test.zig");
+const TestCase = test_module.TestCase;
+
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
@@ -31,6 +34,8 @@ pub fn main() !void {
 
     if (mem.eql(u8, command, "run")) {
         try run(stdin, stdout, stderr, &args_it, alloc);
+    } else if (mem.eql(u8, command, "test")) {
+        try tests(stdout, stderr, &args_it, alloc);
     } else if (mem.eql(u8, command, "help")) {
         try stderr.writeAll(msg.usage);
     } else {
@@ -75,30 +80,82 @@ pub fn run(
     };
     defer alloc.free(listing);
 
-    var machine = Machine.init(stdin, stdout, &diagnostic);
+    const MachineT = Machine(std.fs.File.Reader, std.fs.File.Writer);
+
+    var machine = MachineT.init(stdin, stdout, &diagnostic);
     machine.loadListing(listing);
     machine.run() catch |err| switch (err) {
         error.Stop => unreachable,
-        error.AccessDenied => return err,
-        error.BrokenPipe => return err,
-        error.ConnectionResetByPeer => return err,
-        error.DiskQuota => return err,
-        error.FileTooBig => return err,
-        error.InputOutput => return err,
-        error.LockViolation => return err,
-        error.NoSpaceLeft => return err,
-        error.NotOpenForWriting => return err,
-        error.OperationAborted => return err,
-        error.SystemResources => return err,
-        error.Unexpected => return err,
-        error.WouldBlock => return err,
-        error.UnexpectedEof => return err,
-        error.StreamTooLong => return err,
-        error.ConnectionTimedOut => return err,
-        error.IsDir => return err,
-        error.NotOpenForReading => return err,
-        else => |e| return diagnostic.printRuntimeErrorMessage(e, &machine),
+        error.AccessDenied, error.BrokenPipe, error.ConnectionResetByPeer, error.DiskQuota, error.FileTooBig, error.InputOutput, error.LockViolation, error.NoSpaceLeft, error.NotOpenForWriting, error.OperationAborted, error.SystemResources, error.Unexpected, error.WouldBlock, error.UnexpectedEof, error.StreamTooLong, error.ConnectionTimedOut, error.IsDir, error.NotOpenForReading => |e| return e,
+        else => |e| return diagnostic.printRuntimeErrorMessage(MachineT, e, &machine),
     };
+}
+
+pub fn tests(
+    stdout: Writer,
+    stderr: Writer,
+    args: anytype,
+    alloc: Allocator,
+) !void {
+    const test_case = TestCase{
+        .name = "hello world",
+        .input = "",
+        .output = "Hallo Welt\n",
+    };
+
+    const filename = args.next() orelse {
+        try stderr.writeAll(msg.usage);
+        try stderr.writeAll(msg.no_filename);
+        return;
+    };
+    const filepath = std.fs.realpathAlloc(alloc, filename) catch |err| switch (err) {
+        error.FileNotFound => return stderr.print(msg.file_not_found, .{filename}),
+        else => return err,
+    };
+    defer alloc.free(filepath);
+
+    const src = blk: {
+        var file = try std.fs.openFileAbsolute(filepath, .{});
+        const fin = file.reader();
+        defer file.close();
+
+        break :blk try fin.readAllAlloc(alloc, 20_000);
+    };
+    defer alloc.free(src);
+
+    var diagnostic: Diagnostic = undefined;
+    diagnostic.filepath = filepath;
+    diagnostic.stderr = stdout;
+    const listing: Listing = tiny.parseListing(src, alloc, &diagnostic) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => |e| return diagnostic.printAssemblyErrorMessage(e),
+    };
+    defer alloc.free(listing);
+
+    var input_buffer = std.io.FixedBufferStream([]const u8){
+        .buffer = test_case.input,
+        .pos = 0,
+    };
+    const reader = input_buffer.reader();
+    var output_buffer = std.ArrayList(u8).init(alloc);
+    defer output_buffer.deinit();
+    const writer = output_buffer.writer();
+
+    const MachineT = Machine(std.io.FixedBufferStream([]const u8).Reader, std.ArrayList(u8).Writer);
+
+    var machine = MachineT.init(reader, writer, &diagnostic);
+    machine.loadListing(listing);
+    machine.run() catch |err| switch (err) {
+        error.Stop => unreachable,
+        error.OutOfMemory, error.StreamTooLong, error.UnexpectedEof => |e| return e,
+        else => |e| return diagnostic.printRuntimeErrorMessage(MachineT, e, &machine),
+    };
+
+    if (!mem.eql(u8, test_case.output, output_buffer.items)) {
+        try stdout.writeAll("test failed: outputs differ\n");
+    } else {
+        try stdout.writeAll("test passed: outputs matched\n");
+    }
 }
 
 pub const msg = struct {

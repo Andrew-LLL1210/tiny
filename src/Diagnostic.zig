@@ -5,7 +5,6 @@ const Writer = @import("std").fs.File.Writer;
 const msg = @import("main.zig").msg;
 const Word = @import("machine.zig").Word;
 const Ptr = @import("machine.zig").Ptr;
-const Machine = @import("machine.zig").Machine;
 
 stderr: Writer,
 filepath: []const u8,
@@ -56,7 +55,7 @@ pub fn printAssemblyErrorMessage(self: *const Diagnostic, err: AssemblyError) !v
     }
 }
 
-pub fn printRuntimeErrorMessage(self: *const Diagnostic, err: RuntimeError, m: *const Machine) !void {
+pub fn printRuntimeErrorMessage(self: *const Diagnostic, comptime Machine: type, err: RuntimeError, m: *const Machine) !void {
     switch (err) {
         error.Overflow => try self.writeWarning("overflow: {d} -> {d}", .{ self.large_int, self.overflowed_int }),
         error.CannotDecode => try self.writeCrash(msg.cannot_decode, .{
