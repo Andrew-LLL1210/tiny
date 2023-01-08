@@ -19,6 +19,7 @@ pub const RuntimeError = error{
     DivideByZero,
     InvalidCharacter,
     EndOfStream,
+    UnexpectedEof,
 };
 
 // pub fn writeListing(listing: Listing, out: Writer) !void {

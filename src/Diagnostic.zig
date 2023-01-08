@@ -8,6 +8,7 @@ const Ptr = @import("machine.zig").Ptr;
 
 stderr: Writer,
 filepath: []const u8,
+use_ansi: bool = true,
 
 label_name: []const u8,
 label_prior_line: usize,
@@ -64,6 +65,7 @@ pub fn printRuntimeErrorMessage(self: *const Diagnostic, comptime Machine: type,
         }),
         error.DivideByZero => try self.writeCrash(msg.divide_by_zero, .{}),
         error.EndOfStream => try self.writeCrash(msg.end_of_stream, .{}),
+        error.UnexpectedEof => try self.writeCrash(msg.unexpected_eof, .{}),
         error.InputIntegerTooLarge => try self.writeWarning(msg.input_integer_too_large, .{}),
         error.InputIntegerTooSmall => try self.writeWarning(msg.input_integer_too_small, .{}),
         error.InvalidCharacter => try self.writeCrash(msg.invalid_character, .{}),
@@ -74,23 +76,42 @@ pub fn printRuntimeErrorMessage(self: *const Diagnostic, comptime Machine: type,
 }
 
 fn writeError(self: *const Diagnostic, comptime message: []const u8, args: anytype) !void {
-    try self.stderr.print("\x1b[97m{s}:{d}: ", .{ self.filepath, self.line });
-    try self.stderr.print(msg.err ++ message, args);
-    try self.stderr.writeAll(msg.endl);
+    if (self.use_ansi) try self.stderr.writeAll("\x1b[97m");
+    try self.stderr.print("{s}:{d}: ", .{ self.filepath, self.line });
+    try self.stderr.writeAll(self.errt());
+    try self.stderr.print(message, args);
+    try self.stderr.writeAll(self.endl());
 }
 
 fn writeNote(self: *const Diagnostic, comptime message: []const u8, args: anytype, alt_line: ?usize) !void {
-    try self.stderr.print("\x1b[97m{s}:{d}: ", .{ self.filepath, alt_line orelse self.line });
-    try self.stderr.print(msg.note ++ message, args);
-    try self.stderr.writeAll(msg.endl);
+    if (self.use_ansi) try self.stderr.writeAll("\x1b[97m");
+    try self.stderr.print("{s}:{d}: ", .{ self.filepath, alt_line orelse self.line });
+    try self.stderr.writeAll(self.note());
+    try self.stderr.print(message, args);
+    try self.stderr.writeAll(self.endl());
 }
 
 fn writeCrash(self: *const Diagnostic, comptime message: []const u8, args: anytype) !void {
-    try self.stderr.print(msg.err ++ message, args);
-    try self.stderr.writeAll(msg.endl);
+    try self.stderr.writeAll(self.errt());
+    try self.stderr.print(message, args);
+    try self.stderr.writeAll(self.endl());
 }
 
 fn writeWarning(self: *const Diagnostic, comptime message: []const u8, args: anytype) !void {
-    try self.stderr.print(msg.warning ++ message, args);
-    try self.stderr.writeAll(msg.endl);
+    try self.stderr.writeAll(self.warning());
+    try self.stderr.print(message, args);
+    try self.stderr.writeAll(self.endl());
+}
+
+fn errt(self: *const Diagnostic) []const u8 {
+    return if (self.use_ansi) "\x1b[91merror:\x1b[97m " else "error: ";
+}
+fn note(self: *const Diagnostic) []const u8 {
+    return if (self.use_ansi) "\x1b[96mnote:\x1b[97m " else "note: ";
+}
+fn warning(self: *const Diagnostic) []const u8 {
+    return if (self.use_ansi) "\x1b[93mwarning:\x1b[97m " else "warning: ";
+}
+fn endl(self: *const Diagnostic) []const u8 {
+    return if (self.use_ansi) "\x1b[0m\n" else "\n";
 }

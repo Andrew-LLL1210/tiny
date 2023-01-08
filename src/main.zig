@@ -86,7 +86,7 @@ pub fn run(
     machine.loadListing(listing);
     machine.run() catch |err| switch (err) {
         error.Stop => unreachable,
-        error.AccessDenied, error.BrokenPipe, error.ConnectionResetByPeer, error.DiskQuota, error.FileTooBig, error.InputOutput, error.LockViolation, error.NoSpaceLeft, error.NotOpenForWriting, error.OperationAborted, error.SystemResources, error.Unexpected, error.WouldBlock, error.UnexpectedEof, error.StreamTooLong, error.ConnectionTimedOut, error.IsDir, error.NotOpenForReading => |e| return e,
+        error.AccessDenied, error.BrokenPipe, error.ConnectionResetByPeer, error.DiskQuota, error.FileTooBig, error.InputOutput, error.LockViolation, error.NoSpaceLeft, error.NotOpenForWriting, error.OperationAborted, error.SystemResources, error.Unexpected, error.WouldBlock, error.StreamTooLong, error.ConnectionTimedOut, error.IsDir, error.NotOpenForReading => |e| return e,
         else => |e| return diagnostic.printRuntimeErrorMessage(MachineT, e, &machine),
     };
 }
@@ -103,17 +103,41 @@ pub fn tests(
         .output = "Hallo Welt\n",
     };
 
-    const filename = args.next() orelse {
+    const dirname = args.next() orelse {
         try stderr.writeAll(msg.usage);
         try stderr.writeAll(msg.no_filename);
         return;
     };
-    const filepath = std.fs.realpathAlloc(alloc, filename) catch |err| switch (err) {
-        error.FileNotFound => return stderr.print(msg.file_not_found, .{filename}),
+    const path = std.fs.realpathAlloc(alloc, dirname) catch |err| switch (err) {
+        error.FileNotFound => return stderr.print(msg.file_not_found, .{dirname}),
         else => return err,
     };
-    defer alloc.free(filepath);
+    defer alloc.free(path);
 
+    var dir = try std.fs.openIterableDirAbsolute(path, .{});
+    defer dir.close();
+    var it = dir.iterate();
+    var count: usize = 0;
+    while (try it.next()) |entry| {
+        if (entry.kind == .File and mem.endsWith(u8, entry.name, ".tny")) {
+            try stdout.print("testing file {s}...\n", .{entry.name});
+            const filepath = try std.fs.path.join(alloc, &.{ path, entry.name });
+            defer alloc.free(filepath);
+            try testOneFile(stdout, test_case, filepath, alloc);
+            try stdout.writeAll("\n");
+            count += 1;
+        }
+    }
+
+    try stdout.print("tested {d} programs\n", .{count});
+}
+
+fn testOneFile(
+    out: Writer,
+    test_case: TestCase,
+    filepath: []const u8,
+    alloc: Allocator,
+) !void {
     const src = blk: {
         var file = try std.fs.openFileAbsolute(filepath, .{});
         const fin = file.reader();
@@ -125,7 +149,8 @@ pub fn tests(
 
     var diagnostic: Diagnostic = undefined;
     diagnostic.filepath = filepath;
-    diagnostic.stderr = stdout;
+    diagnostic.stderr = out;
+    diagnostic.use_ansi = false;
     const listing: Listing = tiny.parseListing(src, alloc, &diagnostic) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => |e| return diagnostic.printAssemblyErrorMessage(e),
@@ -147,14 +172,14 @@ pub fn tests(
     machine.loadListing(listing);
     machine.run() catch |err| switch (err) {
         error.Stop => unreachable,
-        error.OutOfMemory, error.StreamTooLong, error.UnexpectedEof => |e| return e,
+        error.OutOfMemory, error.StreamTooLong => |e| return e,
         else => |e| return diagnostic.printRuntimeErrorMessage(MachineT, e, &machine),
     };
 
     if (!mem.eql(u8, test_case.output, output_buffer.items)) {
-        try stdout.writeAll("test failed: outputs differ\n");
+        try out.writeAll("test failed: outputs differ\n");
     } else {
-        try stdout.writeAll("test passed: outputs matched\n");
+        try out.writeAll("test passed: outputs matched\n");
     }
 }
 
@@ -200,6 +225,7 @@ pub const msg = struct {
     pub const cannot_decode = "cannot decode word {d} into an instruction at address {d}";
     pub const divide_by_zero = "divide by zero";
     pub const end_of_stream = "end of stream";
+    pub const unexpected_eof = "unexpected end of file";
     pub const input_integer_too_large = "integer from input too large; truncating to 99999";
     pub const input_integer_too_small = "integer from input too small; truncating to -99999";
     pub const invalid_character = "invalid character";
