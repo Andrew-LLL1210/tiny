@@ -155,7 +155,14 @@ pub fn parseListing(src: []const u8, alloc: Allocator, diagnostic: *Diagnostic) 
 
         if (parts.op) |op| switch (try firstPass(op, parts.argument, diagnostic)) {
             .define_characters => |string| {
-                for (string) |char| try listing.append(char);
+                var escaped_ix: usize = string.len;
+                for (string) |char, i| switch (char) {
+                    '\\' => if (i == escaped_ix) try listing.append('\\') else {
+                        escaped_ix = i + 1;
+                    },
+                    'n' => try listing.append(if (i == escaped_ix) '\n' else 'n'),
+                    else => try listing.append(char),
+                };
                 try listing.append(0);
             },
             .define_byte, .instruction_1 => |word| try listing.append(word),
@@ -213,7 +220,7 @@ pub fn firstPass(
 
     if (eqlIgnoreCase(op, "dc")) {
         const arg = argument orelse return error.DirectiveExpectedAgument;
-        return .{ .define_characters = arg[0..] };
+        return .{ .define_characters = arg[1..] };
     }
 
     // not a directive
@@ -276,8 +283,6 @@ pub fn separateParts(line: []const u8, diagnostic: *Diagnostic) AssemblyError!Pa
 
     for (line) |char, i| {
         if (char == '\r') break;
-        if (state == .st and char != '\\') arg = IxPair.extendOrInit(arg, i, 1);
-        if (state == .es) arg = IxPair.extendOrInit(arg, i, 1);
 
         // Tabularized implementation of an FSA
         const state_transition: [10]ParserState = switch (char) {
@@ -305,6 +310,9 @@ pub fn separateParts(line: []const u8, diagnostic: *Diagnostic) AssemblyError!Pa
         if (state == .lb) label_or_op = IxPair.extendOrInit(label_or_op, i, 1);
         if (state == .op) op = IxPair.extendOrInit(op, i, 1);
         if (state == .ar) arg = IxPair.extendOrInit(arg, i, 1);
+
+        if (state == .st) arg = IxPair.extendOrInit(arg, i, 1);
+        if (state == .es) arg = IxPair.extendOrInit(arg, i, 1);
     }
 
     return .{
