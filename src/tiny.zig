@@ -12,7 +12,6 @@ const Tuple = std.meta.Tuple;
 const operation = @import("operation.zig");
 const Operation = operation.Operation;
 const machine = @import("machine.zig");
-const Machine = machine.Machine;
 const Word = machine.Word;
 const Ptr = machine.Ptr;
 const Listing = machine.Listing;
