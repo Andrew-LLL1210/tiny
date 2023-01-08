@@ -111,7 +111,7 @@ const ReadSourceError = Allocator.Error || AssemblyError;
 
 /// read tiny source code and produce a listing or failure diagnostic
 /// Errors on faults unrelated to program, i.e. OutOfMemory
-/// diagnosic is an out parameter
+/// diagnostic is an out parameter
 pub fn parseListing(src: []const u8, alloc: Allocator, diagnostic: *Diagnostic) ReadSourceError!Listing {
     // eventual return value
     var listing = ArrayList(?Word).init(alloc);

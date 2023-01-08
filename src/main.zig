@@ -69,7 +69,7 @@ pub fn run(
     var diagnostic: Diagnostic = undefined;
     diagnostic.filepath = filepath;
     diagnostic.stderr = stderr;
-    const listing: Listing = tiny.readSource(src, alloc, &diagnostic) catch |err| switch (err) {
+    const listing: Listing = tiny.parseListing(src, alloc, &diagnostic) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => |e| return diagnostic.printErrorMessage(e),
     };
@@ -118,3 +118,7 @@ pub const msg = struct {
     pub const directive_expected_agument = "'{s}' directive expects an argument";
     pub const out_of_range = "'{s}' is out of range";
 };
+
+test "everything compiles" {
+    std.testing.refAllDecls(@This());
+}
