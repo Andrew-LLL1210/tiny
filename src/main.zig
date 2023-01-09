@@ -97,10 +97,26 @@ pub fn tests(
     args: anytype,
     alloc: Allocator,
 ) !void {
-    const test_case = TestCase{
-        .name = "hello world",
-        .input = "",
-        .output = "Hallo Welt\n",
+    const test_cases: []const TestCase = &.{
+        TestCase{
+            .name = "hello world",
+            .input = "",
+            .output = "Hallo Welt\n",
+        },
+        .{
+            .name = null,
+            .input = "1\n2\n5\n4\n0\n",
+            .output = 
+            \\This program calculates the arithmetic mean of a set of integers.
+            \\Enter a number (0 -> exit): 
+            \\Enter a number (0 -> exit): 
+            \\Enter a number (0 -> exit): 
+            \\Enter a number (0 -> exit): 
+            \\Enter a number (0 -> exit): 
+            \\The integer arithmetic mean is 3
+            \\
+            ,
+        },
     };
 
     const dirname = args.next() orelse {
@@ -123,7 +139,14 @@ pub fn tests(
             try stdout.print("testing file {s}...\n", .{entry.name});
             const filepath = try std.fs.path.join(alloc, &.{ path, entry.name });
             defer alloc.free(filepath);
-            try testOneFile(stdout, test_case, filepath, alloc);
+
+            for (test_cases) |case, i| {
+                try stdout.print("test {d}", .{i});
+                if (case.name) |nm| try stdout.print(" ({s})", .{nm});
+                try stdout.writeAll(":\n");
+                try testOneFile(stdout, case, filepath, alloc);
+            }
+
             try stdout.writeAll("\n");
             count += 1;
         }
