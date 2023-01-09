@@ -94,7 +94,7 @@ pub fn run(
 
     var machine = MachineT.init(stdin, stdout, &diagnostic);
     machine.loadListing(listing);
-    machine.run(2_000, stderr) catch |err| switch (err) {
+    machine.run(8_000, stderr) catch |err| switch (err) {
         error.AccessDenied, error.BrokenPipe, error.ConnectionResetByPeer, error.DiskQuota, error.FileTooBig, error.InputOutput, error.LockViolation, error.NoSpaceLeft, error.NotOpenForWriting, error.OperationAborted, error.SystemResources, error.Unexpected, error.WouldBlock, error.StreamTooLong, error.ConnectionTimedOut, error.IsDir, error.NotOpenForReading => |e| return e,
         else => |e| return diagnostic.printRuntimeErrorMessage(MachineT, stderr, e, &machine),
     };
@@ -223,7 +223,7 @@ fn testOneTestCase(
     machine.loadListing(listing);
 
     // TODO hang safety
-    machine.run(2_000, out) catch |err| switch (err) {
+    machine.run(8_000, out) catch |err| switch (err) {
         error.OutOfMemory, error.StreamTooLong => |e| return e,
         else => |e| {
             try diagnostic.printRuntimeErrorMessage(MachineT, out, e, &machine);
