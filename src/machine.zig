@@ -20,6 +20,7 @@ pub const RuntimeError = error{
     InvalidCharacter,
     EndOfStream,
     UnexpectedEof,
+    Hang,
 };
 
 // pub fn writeListing(listing: Listing, out: Writer) !void {
@@ -48,6 +49,7 @@ pub fn Machine(comptime Reader: type, comptime Writer: type) type {
         in: Reader,
         out: Writer,
         diagnostic: *Diagnostic,
+        warning: RuntimeError!void = {},
 
         pub fn init(
             in: Reader,
@@ -74,11 +76,21 @@ pub fn Machine(comptime Reader: type, comptime Writer: type) type {
 
         const Exit = error{ Stop, SegFault };
 
-        pub fn run(self: *Self) !void {
-            while (self.cycle()) |_| {} else |err| switch (err) {
-                Self.Exit.Stop => {},
-                else => return err,
-            }
+        pub fn run(self: *Self, max_cycles: usize, error_writer: anytype) !void {
+            self.diagnostic.hang_cycles = max_cycles;
+            var i: usize = 0;
+            while (i < max_cycles) : (i += 1) if (self.cycle()) |_| {
+                self.warning = self.warning catch |err| try self.diagnostic.printRuntimeErrorMessage(
+                    Self,
+                    error_writer,
+                    err,
+                    self,
+                );
+            } else |err| switch (err) {
+                Self.Exit.Stop => return,
+                else => |e| return e,
+            };
+            return RuntimeError.Hang;
         }
 
         pub fn cycle(self: *Self) !void {
@@ -144,7 +156,7 @@ pub fn Machine(comptime Reader: type, comptime Writer: type) type {
             if (res != n) {
                 self.diagnostic.large_int = n;
                 self.diagnostic.overflowed_int = res;
-                self.diagnostic.printRuntimeErrorMessage(Self, error.Overflow, self) catch {};
+                self.warning = error.Overflow;
             }
             return res;
         }
@@ -190,10 +202,10 @@ pub fn Machine(comptime Reader: type, comptime Writer: type) type {
             self.acc = self.wrap(std.fmt.parseInt(Word, line, 10) catch |err| switch (err) {
                 error.InvalidCharacter => return err,
                 error.Overflow => if (line[0] == '-') blk: {
-                    self.diagnostic.printRuntimeErrorMessage(Self, error.InputIntegerTooSmall, self) catch {};
+                    self.warning = error.InputIntegerTooSmall;
                     break :blk -99999;
                 } else blk: {
-                    self.diagnostic.printRuntimeErrorMessage(Self, error.InputIntegerTooLarge, self) catch {};
+                    self.warning = error.InputIntegerTooLarge;
                     break :blk 99999;
                 },
             });
