@@ -45,19 +45,20 @@ pub fn main() !void {
         defer alloc.free(file_path);
         try run(stdin, stdout, stderr, file_path, alloc);
     } else if (mem.eql(u8, command, "test")) {
-        const dir_name = args.next() orelse {
-            try stderr.writeAll(msg.usage);
-            try stderr.writeAll(msg.no_filename);
-            return;
-        };
+        try stderr.writeAll(msg.test_not_ready);
+        // const dir_name = args.next() orelse {
+        //     try stderr.writeAll(msg.usage);
+        //     try stderr.writeAll(msg.no_filename);
+        //     return;
+        // };
 
-        const dir_path = std.fs.realpathAlloc(alloc, dir_name) catch |err| switch (err) {
-            error.FileNotFound => return stderr.print(msg.file_not_found, .{dir_name}),
-            else => return err,
-        };
-        defer alloc.free(dir_path);
+        // const dir_path = std.fs.realpathAlloc(alloc, dir_name) catch |err| switch (err) {
+        //     error.FileNotFound => return stderr.print(msg.file_not_found, .{dir_name}),
+        //     else => return err,
+        // };
+        // defer alloc.free(dir_path);
 
-        try tests(stdout, stderr, dir_path, alloc);
+        // try tests(stdout, stderr, dir_path, alloc);
     } else if (mem.eql(u8, command, "help")) {
         try stderr.writeAll(msg.usage);
     } else {
@@ -262,6 +263,7 @@ pub const msg = struct {
     pub const no_filename = err ++ "no file provided" ++ endl;
     pub const not_command = err ++ "'{s}' is not a command" ++ endl;
     pub const file_not_found = err ++ "file not found: '{s}'" ++ endl;
+    pub const test_not_ready = err ++ "'tiny test' is a work in progress and is not ready to be used." ++ endl;
 
     // Assembly errors
     pub const duplicate_label = "duplicate label '{s}'";

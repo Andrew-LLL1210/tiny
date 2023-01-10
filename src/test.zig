@@ -23,5 +23,7 @@ pub fn parseTests(src: []const u8, alloc: Allocator) ![]const TestCase {
 }
 
 fn parseTestCase(src: []const u8, alloc: Allocator) !TestCase {
+    _ = src;
+    _ = alloc;
     return error.NotImplemented;
 }
