@@ -1,8 +1,15 @@
-# Tiny
+# Tiny <!-- omit in toc -->
 
 An Assembler and Testing Toolkit for the Tiny Language
 
 Author: Andrew Phillips
+
+- [Checklist](#checklist)
+- [Installation](#installation)
+  - [Option 1: Prebuilt Binary](#option-1-prebuilt-binary)
+  - [Option 2: Build from Source](#option-2-build-from-source)
+- [Usage](#usage)
+  - [Assemble and Run a Program](#assemble-and-run-a-program)
 
 ## Checklist
 
