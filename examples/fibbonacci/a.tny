@@ -1,0 +1,45 @@
+; input a number `n` and print out the `n`th fibbonacci number (with fib[0] = 0)
+; nonrecursive solution
+
+jmp main
+
+; variables
+i: ds 1
+fib[i]: ds 1
+fib[next]: ds 1
+x: ds 1
+
+main:
+    ; initialize
+    ld 0
+    st i
+    st fib[i]
+    ld 1
+    st fib[next]
+
+    call printInteger
+    st x
+
+    ; evaluate fib[x]
+    while_1:
+        ld x
+        sub i
+        jle while_1_end
+    while_1_begin:
+        ld fib[i]
+        add fib[next]
+        st fib[next]
+        sub fib[i]
+        st fib[i]
+
+        ld i
+        add 1
+        st i
+
+        jmp while_1
+    while_1_end:
+
+    ; print result
+    ld fib[i]
+    call printInteger
+stop
