@@ -42,7 +42,11 @@ pub const JmpArgs = struct {
 
 const DecodeError = error{ CannotDecode, WordOutOfRange };
 pub fn decode(instruction: Word) DecodeError!Operation {
-    if (instruction < 0 or instruction > 99999) return DecodeError.WordOutOfRange;
+    if (instruction < -99999 or instruction > 99999) {
+        std.log.info("\ninstruction = {d}\n", .{instruction});
+        return DecodeError.WordOutOfRange;
+    }
+    if (instruction < 0) return DecodeError.CannotDecode;
     const positive = @intCast(u24, instruction);
     const opcode = positive / 1000;
     const arg = @truncate(Arg, positive % 1000);
