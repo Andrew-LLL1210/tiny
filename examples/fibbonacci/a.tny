@@ -17,7 +17,7 @@ main:
     ld 1
     st fib[next]
 
-    call printInteger
+    call inputInteger
     st x
 
     ; evaluate fib[x]
