@@ -104,10 +104,24 @@ const Tokenizer = struct {
                 }
                 if (char == read[start]) break _len;
                 if (char == '\\') escape = true;
-            };
+            } else return self.reporter.reportErrorLineCol(
+                self.line_no,
+                self.index + start,
+                self.line.len,
+                "Unclosed string",
+                .{},
+            );
             self.index += start + len;
             return .{ .string = read[start..][0..len] };
         }
+
+        return self.reporter.reportErrorLineCol(
+            self.line_no,
+            self.index + self.start,
+            self.index + self.start,
+            "Illegal character {x:02}",
+            .{read[start]},
+        );
     }
 
     const chars = struct {
