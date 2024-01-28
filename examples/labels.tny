@@ -1,7 +1,0 @@
-JMP labEL2
-label1: caLL PRINTiNTEGER
-Jmp label3
-label2: ld 6
-jmP labEL1
-labEL3:
-sTOp
