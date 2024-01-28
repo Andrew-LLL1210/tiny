@@ -34,7 +34,7 @@ pub fn parse(
         if (parsed_line.instruction) |instruction| switch (instruction) {
             .ds_directive => |length| ip += length,
             .dd_directive => |value| {
-                try listing.append(value);
+                try listing.append(.{ .ip = ip, .word = value, .line_no = line_no });
                 ip += 1;
             },
             .dc_directive => |string| {
@@ -42,7 +42,7 @@ pub fn parse(
                 _ = length;
             },
             else => {
-                return reporter.reportErrorLine(line_no, "instruction type not supported", .{});
+                return reporter.reportErrorLine(line_no, "instruction type {any} not supported", .{instruction});
             },
         };
     }
@@ -57,9 +57,9 @@ fn parseLine(
 ) ReportedError!ProcessedLine {
     // assert that first nonwhitespace charecter is an identifier character
     const first_char_ix = std.mem.indexOfNone(u8, line, " \t\r") orelse return .{};
-    const first_char = line[first_char_ix];
+    const first_char: u8 = line[first_char_ix];
     if (CharClass.of(first_char) == .semicolon) return .{};
-    if (CharClass.of(first_char) != .identifier)
+    if (CharClass.of(first_char) != .identifier_start)
         return reporter.reportErrorLineCol(
             line_no,
             first_char_ix,

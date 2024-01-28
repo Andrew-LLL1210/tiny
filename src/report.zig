@@ -8,6 +8,8 @@ pub const Reporter = struct {
     options: Options,
     listing: ?parse.Listing = null,
 
+    pub const ReportedError = error{ReportedError};
+
     pub fn reportErrorLine(
         self: *const Reporter,
         line_no: usize,
@@ -53,7 +55,7 @@ pub const Reporter = struct {
         try config.setColor(self.out, .bright_white);
         var line_it = std.mem.splitScalar(u8, self.source, '\n');
         for (1..line_no) |_| _ = line_it.next();
-        try self.out.print("{s}\n", .{line_it.next()});
+        if (line_it.next()) |line| try self.out.print("{s}\n", .{line});
 
         if (col_start == 0) return;
         try self.out.writeByteNTimes(' ', col_start - 1);
@@ -61,7 +63,6 @@ pub const Reporter = struct {
         try self.out.writeAll("\n");
     }
 
-    const ReportedError = error{ReportedError};
     const Options = struct {
         color_config: std.io.tty.Config,
     };
