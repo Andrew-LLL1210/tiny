@@ -55,21 +55,75 @@ fn parseLine(
     line_no: usize,
     reporter: *const Reporter,
 ) ReportedError!ProcessedLine {
-    // assert that first nonwhitespace charecter is an identifier character
-    const first_char_ix = std.mem.indexOfNone(u8, line, " \t\r") orelse return .{};
-    const first_char: u8 = line[first_char_ix];
-    if (CharClass.of(first_char) == .semicolon) return .{};
-    if (CharClass.of(first_char) != .identifier_start)
-        return reporter.reportErrorLineCol(
-            line_no,
-            first_char_ix,
-            first_char_ix,
-            "expected operation mnemonic or label, found \'{c}\'",
-            .{first_char},
-        );
-
+    _ = line_no;
+    _ = line;
     return reporter.reportErrorLine(0, "parseLine() not implemented", .{});
 }
+
+const Tokenizer = struct {
+    line: []const u8,
+    index: usize,
+    reporter: *const Reporter,
+    line_no: usize,
+
+    fn next(self: *Tokenizer) ReportedError!?Token {
+        const read = self.line[self.index..];
+        const start = std.mem.indexOfNone(u8, read, chars.whitespace) orelse return .{ null, read };
+        if (read[start] == ';') return null;
+
+        if (read[start] == ':') {
+            self.index += start + 1;
+            return .{ .colon = {} };
+        }
+
+        if (std.mem.indexOfScalar(u8, chars.id_begin, read[start])) |_| {
+            const end = std.mem.indexOfNonePos(u8, read, start, chars.id) orelse read.len;
+            self.index += end;
+            return .{ .identifier = read[start..end] };
+        }
+
+        if (std.ascii.isDigit(read[start]) or read[start] == '-') {
+            const end = std.mem.indexOfNonePos(u8, read, start, chars.digits) orelse read.len;
+            if (end - start > 6) return self.reporter.reportErrorLineCol(
+                self.line_no,
+                self.index + start,
+                self.index + end,
+                "Number literal is too large",
+                .{},
+            );
+            self.index += end;
+            return .{ .number = read[start..end] };
+        }
+
+        if (read[start] == '"' or read[start] == '\'') {
+            var escape = true;
+            const len = for (read[start..], 1..) |char, _len| {
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                if (char == read[start]) break _len;
+                if (char == '\\') escape = true;
+            };
+            self.index += start + len;
+            return .{ .string = read[start..][0..len] };
+        }
+    }
+
+    const chars = struct {
+        const whitespace = " \t\r";
+        const id = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_&[]0123456789";
+        const id_begin = id[0 .. 26 * 2 + 2];
+        const digits = "0123456789";
+    };
+};
+
+const Token = union(enum) {
+    identifier: []const u8,
+    number: []const u8,
+    string: []const u8,
+    colon,
+};
 
 const ProcessedLine = struct {
     label: ?[]const u8 = null,
