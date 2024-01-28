@@ -13,7 +13,7 @@ pub const Reporter = struct {
         line_no: usize,
         comptime fmt: []const u8,
         args: anytype,
-    ) void {
+    ) ReportedError {
         return self.reportErrorLineCol(line_no, 0, 0, fmt, args);
     }
 
@@ -24,8 +24,9 @@ pub const Reporter = struct {
         col_end: usize,
         comptime fmt: []const u8,
         args: anytype,
-    ) void {
-        return self.reportErrorRaw(line_no, col_start, col_end, fmt, args) catch {};
+    ) ReportedError {
+        self.reportErrorRaw(line_no, col_start, col_end, fmt, args) catch {};
+        return ReportedError.ReportedError;
     }
 
     pub fn reportErrorRaw(
@@ -47,12 +48,20 @@ pub const Reporter = struct {
         try config.setColor(self.out, .bright_white);
         try self.out.print(fmt ++ "\n", args);
 
+        if (line_no == 0) return;
+        try config.setColor(self.out, .dim);
+        try config.setColor(self.out, .bright_white);
+        var line_it = std.mem.splitScalar(u8, self.source, '\n');
+        for (1..line_no) |_| _ = line_it.next();
+        try self.out.print("{s}\n", .{line_it.next()});
+
         if (col_start == 0) return;
         try self.out.writeByteNTimes(' ', col_start - 1);
-        try self.out.writeByteNTimes('~', col_end - col_start);
+        try self.out.writeByteNTimes('~', col_end - col_start + 1);
         try self.out.writeAll("\n");
     }
 
+    const ReportedError = error{ReportedError};
     const Options = struct {
         color_config: std.io.tty.Config,
     };

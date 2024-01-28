@@ -26,7 +26,7 @@ pub const Machine = struct {
     }
 
     pub fn run(self: Machine) error{ReportedError}!void {
-        self.reporter.reportErrorLine(0, "Machine.run is not implemented", .{});
+        return self.reporter.reportErrorLine(0, "Machine.run() is not implemented", .{});
     }
 };
 
