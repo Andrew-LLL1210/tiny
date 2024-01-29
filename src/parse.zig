@@ -12,6 +12,13 @@ pub fn parse(
     errdefer listing.deinit();
     var label_table = LabelTable.init(alloc);
     defer label_table.deinit();
+    var deferred_operations = std.ArrayList(struct {
+        ip: usize,
+        line_no: usize,
+        opcode: Opcode,
+        argument: Argument,
+    }).init(alloc);
+    defer deferred_operations.deinit();
 
     try label_table.putNoClobber("printInteger", 900);
     try label_table.putNoClobber("printString", 925);
@@ -38,16 +45,31 @@ pub fn parse(
                 ip += 1;
             },
             .dc_directive => |string| {
-                const length = try encodeString(&listing, string);
-                _ = length;
+                const length = try encodeString(&listing, string, reporter, ip, line_no);
+                ip += length;
             },
-            else => {
-                return reporter.reportErrorLine(line_no, "instruction type {any} not supported", .{instruction});
+            .operation => |operation| {
+                try deferred_operations.append(.{
+                    .ip = ip,
+                    .line_no = line_no,
+                    .opcode = operation.opcode,
+                    .argument = operation.argument,
+                });
+                ip += 1;
             },
         };
     }
 
-    return reporter.reportErrorLine(0, "parse() is not implemented", .{});
+    for (deferred_operations.items) |operation| {
+        @constCast(reporter).setLineCol(operation.line_no, 0, 0);
+        try listing.append(.{
+            .ip = operation.ip,
+            .word = try operation.opcode.encode(operation.argument, &label_table, reporter),
+            .line_no = operation.line_no,
+        });
+    }
+
+    return listing.toOwnedSlice();
 }
 
 fn parseLine(
@@ -237,10 +259,33 @@ const Instruction = union(enum) {
     }
 };
 
-fn encodeString(listing: *std.ArrayList(ListingEntry), string: []const u8) !void {
-    _ = string;
-    _ = listing;
-    return;
+fn encodeString(
+    listing: *std.ArrayList(ListingEntry),
+    string: []const u8,
+    reporter: *const Reporter,
+    start: usize,
+    line_no: usize,
+) error{ OutOfMemory, ReportedError }!usize {
+    var ip: usize = start;
+    var escaped = false;
+    for (string[1 .. string.len - 1]) |char| if (escaped) {
+        escaped = false;
+        try listing.append(.{ .ip = ip, .line_no = line_no, .word = switch (char) {
+            'n' => '\n',
+            '\\' => '\\',
+            else => return reporter.reportErrorLine(line_no, "Illegal escape code '\\{c}' in string", .{char}),
+        } });
+        ip += 1;
+    } else switch (char) {
+        '\\' => escaped = true,
+        else => {
+            try listing.append(.{ .ip = ip, .line_no = line_no, .word = char });
+            ip += 1;
+        },
+    };
+    try listing.append(.{ .ip = ip, .line_no = line_no, .word = 0 });
+
+    return ip - start + 1;
 }
 
 const Word = @import("run.zig").Word;
@@ -301,8 +346,8 @@ fn parseWord(source: []const u8, reporter: *const Reporter) ReportedError!Word {
 const Opcode = enum(u32) {
     stop,
     ld,
-    lda,
     ldi,
+    lda,
     st,
     sti,
     add,
@@ -323,7 +368,7 @@ const Opcode = enum(u32) {
     jge,
     jle,
     jne,
-    pusha,
+    pusha = 26,
     dd,
     ds,
     dc,
@@ -353,6 +398,33 @@ const Opcode = enum(u32) {
             .none => return opcode.hasArgument() != .yes,
             .label => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .yes,
             .immediate => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .no,
+        }
+    }
+
+    fn encode(
+        opcode: Opcode,
+        argument: Argument,
+        label_table: *const LabelTable,
+        reporter: *const Reporter,
+    ) ReportedError!Word {
+        // precondition: opcode.takesArgument(argument)
+        switch (argument) {
+            .none => return @intCast(@intFromEnum(opcode) * 1000),
+            .label => |label_name| {
+                const label_address = label_table.get(label_name) orelse
+                    return reporter.reportHere("Label {s} does not exist", .{label_name});
+
+                return @intCast(label_address + 1000 * switch (opcode) {
+                    .push, .pop => @intFromEnum(opcode) + 6,
+                    else => @intFromEnum(opcode),
+                });
+            },
+            .immediate => |arg| {
+                return @intCast(arg + 1000 * switch (opcode) {
+                    .ld, .add, .sub, .mul, .div => @intFromEnum(opcode) + 90,
+                    else => @intFromEnum(opcode),
+                });
+            },
         }
     }
 };
