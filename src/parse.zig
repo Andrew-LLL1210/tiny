@@ -55,20 +55,51 @@ fn parseLine(
     line_no: usize,
     reporter: *const Reporter,
 ) ReportedError!ProcessedLine {
-    _ = line_no;
-    _ = line;
+    var tokens = Tokenizer{ .line = line, .reporter = reporter, .line_no = line_no };
+    const token1 = try tokens.next() orelse return .{};
+    if (token1 != .identifier) return reporter.reportErrorLineCol(
+        line_no,
+        tokens.index - token1.length(),
+        tokens.index,
+        "Expected label or instruction, found {s}",
+        .{@tagName(token1)},
+    );
+
+    var label: ?[]const u8 = null;
+    var mnemonic: []const u8 = token1.identifier;
+    var m_argument: ?Token = try tokens.next();
+
+    if (m_argument) |token2| if (token2 == .colon) {
+        label = token1.identifier;
+        mnemonic = switch (try tokens.next() orelse return .{ .label = label }) {
+            .identifier => |source| source,
+            else => |token| return reporter.reportErrorLineCol(
+                line_no,
+                tokens.index - token.length(),
+                tokens.index,
+                "Expected instruction or end of line, found {s}",
+                .{@tagName(token)},
+            ),
+        };
+        m_argument = try tokens.next();
+    };
+
+    // TODO
+    // right now we know that mnemonic is an idenifier, and m_argument is the next token if exists.
+    // need to figure out whether mnemonic is valid, and whether m_argument is allowed for it.
+
     return reporter.reportErrorLine(0, "parseLine() not implemented", .{});
 }
 
 const Tokenizer = struct {
     line: []const u8,
-    index: usize,
+    index: usize = 0,
     reporter: *const Reporter,
     line_no: usize,
 
     fn next(self: *Tokenizer) ReportedError!?Token {
         const read = self.line[self.index..];
-        const start = std.mem.indexOfNone(u8, read, chars.whitespace) orelse return .{ null, read };
+        const start = std.mem.indexOfNone(u8, read, chars.whitespace) orelse return null;
         if (read[start] == ';') return null;
 
         if (read[start] == ':') {
@@ -117,8 +148,8 @@ const Tokenizer = struct {
 
         return self.reporter.reportErrorLineCol(
             self.line_no,
-            self.index + self.start,
-            self.index + self.start,
+            self.index + start,
+            self.index + start,
             "Illegal character {x:02}",
             .{read[start]},
         );
@@ -137,6 +168,13 @@ const Token = union(enum) {
     number: []const u8,
     string: []const u8,
     colon,
+
+    fn length(token: Token) usize {
+        return switch (token) {
+            .identifier, .number, .string => |source| source.len,
+            .colon => 1,
+        };
+    }
 };
 
 const ProcessedLine = struct {
