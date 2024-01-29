@@ -82,13 +82,34 @@ fn parseLine(
             ),
         };
         m_argument = try tokens.next();
+        if (m_argument) |token4| if (token4 == .colon) {
+            const i = @intFromPtr(line.ptr) - @intFromPtr(mnemonic.ptr);
+            return reporter.reportErrorLineCol(line_no, i, tokens.index, "Only one label is allowed per line", .{});
+        };
     };
 
-    // TODO
-    // right now we know that mnemonic is an idenifier, and m_argument is the next token if exists.
-    // need to figure out whether mnemonic is valid, and whether m_argument is allowed for it.
+    if (try tokens.next()) |token| return reporter.reportErrorLineCol(
+        line_no,
+        tokens.index - token.length(),
+        tokens.index,
+        "Expected newline, found {s}",
+        .{@tagName(token)},
+    );
 
-    return reporter.reportErrorLine(0, "parseLine() not implemented", .{});
+    const mnemonic_ix = @intFromPtr(mnemonic.ptr) - @intFromPtr(line.ptr);
+    const opcode = mnemonic_map.get(mnemonic) orelse return reporter.reportErrorLineCol(
+        line_no,
+        mnemonic_ix + 1,
+        mnemonic_ix + mnemonic.len,
+        "Invalid operation mnemonic: {s}",
+        .{mnemonic},
+    );
+
+    @constCast(reporter).setLineCol(line_no, mnemonic_ix + 1, tokens.index);
+    return .{
+        .label = label,
+        .instruction = try Instruction.fromOpcode(opcode, m_argument, reporter),
+    };
 }
 
 const Tokenizer = struct {
@@ -187,6 +208,33 @@ const Instruction = union(enum) {
     dd_directive: Word,
     dc_directive: []const u8,
     operation: struct { argument: Argument, opcode: Opcode },
+
+    fn fromOpcode(
+        opcode: Opcode,
+        m_argument: ?Token,
+        reporter: *const Reporter,
+    ) ReportedError!Instruction {
+        // precondition: argument is not a .colon token
+        if (m_argument) |argument| switch (opcode) {
+            .ds => if (argument == .number) return .{ .ds_directive = try parseAddress(argument.number, reporter) },
+            .dd => if (argument == .number) return .{ .dd_directive = try parseWord(argument.number, reporter) },
+            .dc => if (argument == .string) return .{ .dc_directive = argument.string },
+            else => {},
+        };
+        if (m_argument) |argument| if (argument == .string)
+            return reporter.reportHere("Strings are only accepted on the dc directive", .{});
+        switch (opcode) {
+            .ds, .dd, .dc => return reporter.reportHere("Invalid use of {s}", .{@tagName(opcode)}),
+            else => {},
+        }
+
+        const argument = try Argument.from(m_argument, reporter);
+        if (opcode.takesArgument(argument)) return .{ .operation = .{ .argument = argument, .opcode = opcode } };
+        return reporter.reportHere("{s} operation does not take a {s} argument", .{
+            @tagName(opcode),
+            @tagName(argument),
+        });
+    }
 };
 
 fn encodeString(listing: *std.ArrayList(ListingEntry), string: []const u8) !void {
@@ -219,38 +267,41 @@ const CaseInsensitiveContext = struct {
     }
 };
 
-const CharClass = enum {
-    identifier_start,
-    identifier_contain,
-    number,
-    colon,
-    whitespace,
-    semicolon,
-    quote,
-    illegal,
-    fn of(char: u8) CharClass {
-        return switch (char) {
-            'a'...'z', 'A'...'Z', '_', '&' => .identifier_start,
-            '[', ']' => .identifier_contain,
-            '0'...'9' => .number,
-            ':' => .colon,
-            ';' => .semicolon,
-            ' ', '\r', '\t' => .whitespace,
-            '\'', '\"' => .quote,
-            else => .illegal,
-        };
-    }
-};
-
 const Argument = union(enum) {
     none,
     immediate: u32,
     label: []const u8,
+
+    fn from(m_token: ?Token, reporter: *const Reporter) ReportedError!Argument {
+        if (m_token) |token| switch (token) {
+            .identifier => |label| return .{ .label = label },
+            .number => |label| return .{ .immediate = try parseAddress(label, reporter) },
+            .string => unreachable,
+            .colon => unreachable,
+        } else return .{ .none = {} };
+    }
 };
+
+fn parseAddress(source: []const u8, reporter: *const Reporter) ReportedError!u32 {
+    if (source[0] == '-')
+        return reporter.reportHere("Negative number cannot be used as an argument here", .{});
+    const val = std.fmt.parseUnsigned(u32, source, 10) catch unreachable;
+    if (val > 999)
+        return reporter.reportHere("Argument value must be in range [0, 999]", .{});
+    return val;
+}
+
+fn parseWord(source: []const u8, reporter: *const Reporter) ReportedError!Word {
+    const val = std.fmt.parseInt(Word, source, 10) catch unreachable;
+    if (val < -99999 or val > 99999)
+        return reporter.reportHere("Word value must be in range [-99999, 99999]", .{});
+    return val;
+}
 
 const Opcode = enum(u32) {
     stop,
     ld,
+    lda,
     ldi,
     st,
     sti,
@@ -273,12 +324,16 @@ const Opcode = enum(u32) {
     jle,
     jne,
     pusha,
+    dd,
+    ds,
+    dc,
 
     fn hasArgument(opcode: Opcode) Ternary {
         return switch (opcode) {
             .stop, .in, .out, .ret => .no,
             .push, .pop => .maybe,
-            .ld, .ldi, .st, .sti, .add, .sub, .mul, .div, .jmp, .jg, .jl, .je, .call, .ldparam, .jge, .jle, .jne, .pusha => .yes,
+            .ld, .lda, .ldi, .st, .sti, .add, .sub, .mul, .div, .jmp, .jg, .jl, .je, .call, .ldparam, .jge, .jle, .jne, .pusha => .yes,
+            .dc, .dd, .ds => unreachable,
         };
     }
 
@@ -289,8 +344,56 @@ const Opcode = enum(u32) {
             .ld, .add, .sub, .mul, .div => .maybe,
             .ldparam => .yes,
             .stop, .in, .out, .ret => unreachable,
+            .dc, .dd, .ds => unreachable,
         };
     }
+
+    fn takesArgument(opcode: Opcode, argument: Argument) bool {
+        switch (argument) {
+            .none => return opcode.hasArgument() != .yes,
+            .label => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .yes,
+            .immediate => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .no,
+        }
+    }
 };
+
+const mnemonic_map: type = std.ComptimeStringMapWithEql(Opcode,
+//blk: {
+//    var map: []struct { []const u8, Opcode } = &.{};
+//    for (std.enums.values(Opcode)) |name| {
+//        map = map ++ .{ name, std.enums.nameCast(Opcode, name) };
+//    }
+//    break :blk map;
+//},
+.{
+    .{ "stop", .stop },
+    .{ "ld", .ld },
+    .{ "lda", .lda },
+    .{ "ldi", .ldi },
+    .{ "st", .st },
+    .{ "sti", .sti },
+    .{ "add", .add },
+    .{ "sub", .sub },
+    .{ "mul", .mul },
+    .{ "div", .div },
+    .{ "in", .in },
+    .{ "out", .out },
+    .{ "jmp", .jmp },
+    .{ "jg", .jg },
+    .{ "jl", .jl },
+    .{ "je", .je },
+    .{ "call", .call },
+    .{ "ret", .ret },
+    .{ "push", .push },
+    .{ "pop", .pop },
+    .{ "ldparam", .ldparam },
+    .{ "jge", .jge },
+    .{ "jle", .jle },
+    .{ "jne", .jne },
+    .{ "pusha", .pusha },
+    .{ "dd", .dd },
+    .{ "ds", .ds },
+    .{ "dc", .dc },
+}, std.ascii.eqlIgnoreCase);
 
 const Ternary = enum { yes, no, maybe };
