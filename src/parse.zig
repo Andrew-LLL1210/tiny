@@ -13,10 +13,8 @@ pub fn parse(
     var label_table = LabelTable.init(alloc);
     defer label_table.deinit();
     var deferred_operations = std.ArrayList(struct {
-        ip: usize,
-        line_no: usize,
-        opcode: Opcode,
-        argument: Argument,
+        index: usize,
+        label_name: []const u8,
     }).init(alloc);
     defer deferred_operations.deinit();
 
@@ -49,11 +47,15 @@ pub fn parse(
                 ip += length;
             },
             .operation => |operation| {
-                try deferred_operations.append(.{
+                try listing.append(.{
                     .ip = ip,
+                    .word = operation.opcode.encode(operation.argument),
                     .line_no = line_no,
-                    .opcode = operation.opcode,
-                    .argument = operation.argument,
+                });
+
+                if (operation.argument == .label) try deferred_operations.append(.{
+                    .index = listing.items.len - 1,
+                    .label_name = operation.argument.label,
                 });
                 ip += 1;
             },
@@ -61,12 +63,10 @@ pub fn parse(
     }
 
     for (deferred_operations.items) |operation| {
-        @constCast(reporter).setLineCol(operation.line_no, 0, 0);
-        try listing.append(.{
-            .ip = operation.ip,
-            .word = try operation.opcode.encode(operation.argument, &label_table, reporter),
-            .line_no = operation.line_no,
-        });
+        const label_line_no = listing.items[operation.index].line_no;
+        const label_address = label_table.get(operation.label_name) orelse
+            return reporter.reportErrorLine(label_line_no, "Label {s} does not exist", .{operation.label_name});
+        listing.items[operation.index].word += @intCast(label_address);
     }
 
     return listing.toOwnedSlice();
@@ -404,27 +404,18 @@ const Opcode = enum(u32) {
     fn encode(
         opcode: Opcode,
         argument: Argument,
-        label_table: *const LabelTable,
-        reporter: *const Reporter,
-    ) ReportedError!Word {
+    ) Word {
         // precondition: opcode.takesArgument(argument)
         switch (argument) {
             .none => return @intCast(@intFromEnum(opcode) * 1000),
-            .label => |label_name| {
-                const label_address = label_table.get(label_name) orelse
-                    return reporter.reportHere("Label {s} does not exist", .{label_name});
-
-                return @intCast(label_address + 1000 * switch (opcode) {
-                    .push, .pop => @intFromEnum(opcode) + 6,
-                    else => @intFromEnum(opcode),
-                });
-            },
-            .immediate => |arg| {
-                return @intCast(arg + 1000 * switch (opcode) {
-                    .ld, .add, .sub, .mul, .div => @intFromEnum(opcode) + 90,
-                    else => @intFromEnum(opcode),
-                });
-            },
+            .label => return @intCast(1000 * switch (opcode) {
+                .push, .pop => @intFromEnum(opcode) + 6,
+                else => @intFromEnum(opcode),
+            }),
+            .immediate => |arg| return @intCast(arg + 1000 * switch (opcode) {
+                .ld, .add, .sub, .mul, .div => @intFromEnum(opcode) + 90,
+                else => @intFromEnum(opcode),
+            }),
         }
     }
 };
