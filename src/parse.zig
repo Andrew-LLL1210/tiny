@@ -38,7 +38,7 @@ pub fn parse(
 
         if (parsed_line.instruction) |instruction| switch (instruction) {
             .ds_directive => |length| ip += length,
-            .dd_directive => |value| {
+            .db_directive => |value| {
                 try listing.append(.{ .ip = ip, .word = value, .line_no = line_no });
                 ip += 1;
             },
@@ -227,7 +227,7 @@ const ProcessedLine = struct {
 
 const Instruction = union(enum) {
     ds_directive: usize,
-    dd_directive: Word,
+    db_directive: Word,
     dc_directive: []const u8,
     operation: struct { argument: Argument, opcode: Opcode },
 
@@ -239,14 +239,14 @@ const Instruction = union(enum) {
         // precondition: argument is not a .colon token
         if (m_argument) |argument| switch (opcode) {
             .ds => if (argument == .number) return .{ .ds_directive = try parseAddress(argument.number, reporter) },
-            .dd => if (argument == .number) return .{ .dd_directive = try parseWord(argument.number, reporter) },
+            .db => if (argument == .number) return .{ .db_directive = try parseWord(argument.number, reporter) },
             .dc => if (argument == .string) return .{ .dc_directive = argument.string },
             else => {},
         };
         if (m_argument) |argument| if (argument == .string)
             return reporter.reportHere("Strings are only accepted on the dc directive", .{});
         switch (opcode) {
-            .ds, .dd, .dc => return reporter.reportHere("Invalid use of {s}", .{@tagName(opcode)}),
+            .ds, .db, .dc => return reporter.reportHere("Invalid use of {s}", .{@tagName(opcode)}),
             else => {},
         }
 
@@ -369,7 +369,7 @@ const Opcode = enum(u32) {
     jle,
     jne,
     pusha = 26,
-    dd,
+    db,
     ds,
     dc,
 
@@ -378,7 +378,7 @@ const Opcode = enum(u32) {
             .stop, .in, .out, .ret => .no,
             .push, .pop => .maybe,
             .ld, .lda, .ldi, .st, .sti, .add, .sub, .mul, .div, .jmp, .jg, .jl, .je, .call, .ldparam, .jge, .jle, .jne, .pusha => .yes,
-            .dc, .dd, .ds => unreachable,
+            .dc, .db, .ds => unreachable,
         };
     }
 
@@ -389,7 +389,7 @@ const Opcode = enum(u32) {
             .ld, .add, .sub, .mul, .div => .maybe,
             .ldparam => .yes,
             .stop, .in, .out, .ret => unreachable,
-            .dc, .dd, .ds => unreachable,
+            .dc, .db, .ds => unreachable,
         };
     }
 
@@ -454,7 +454,7 @@ const mnemonic_map: type = std.ComptimeStringMapWithEql(Opcode,
     .{ "jle", .jle },
     .{ "jne", .jne },
     .{ "pusha", .pusha },
-    .{ "dd", .dd },
+    .{ "db", .db },
     .{ "ds", .ds },
     .{ "dc", .dc },
 }, std.ascii.eqlIgnoreCase);
