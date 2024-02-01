@@ -13,11 +13,12 @@ pub const Reporter = struct {
     pub const ReportedError = error{ReportedError};
 
     pub fn reportIp(self: *const Reporter, ip: usize, comptime fmt: []const u8, args: anytype) ReportedError {
+        std.debug.print("error at ip {d}\n", .{ip});
         const listing = self.listing orelse return self.reportErrorLine(444444, fmt, args);
         const ix = @min(ip, listing.len - 1);
         for (0..ix + 1) |offset| {
             if (listing[ix - offset].ip == ip)
-                return self.reportErrorLine(listing[ix - offset].ip, fmt, args);
+                return self.reportErrorLine(listing[ix - offset].line_no, fmt, args);
         }
         return self.reportErrorLine(777777, fmt, args);
     }

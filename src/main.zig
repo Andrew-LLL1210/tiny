@@ -47,6 +47,8 @@ pub fn main() !void {
     };
     defer alloc.free(listing);
 
+    reporter.listing = listing;
+
     //    var prev_line_no: usize = std.math.maxInt(usize);
     //    for (listing) |item| {
     //        if (item.line_no == prev_line_no) continue;
@@ -65,8 +67,5 @@ pub fn main() !void {
     //    }
 
     // run program
-    var machine = run.Machine.init(listing, stdin, stdout, &reporter);
-    machine.run() catch |err| switch (err) {
-        error.ReportedError => return,
-    };
+    run.runMachine(listing, stdin, stdout, &reporter) catch {};
 }
