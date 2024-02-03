@@ -36,7 +36,7 @@ pub fn runMachine(
         switch (op) {
             .ld, .ldi, .stop, .lda, .ld_imm, .in, .ret, .jmp, .pop, .push_addr, .pop_addr, .pusha, .ldparam => {},
             .call => {
-                if (arg == 925 or arg == 950) if (acc == null)
+                if (arg == 925 or arg == 950 or arg == inputString) if (acc == null)
                     return reporter.reportIp(cur_ip, "Acc is null", .{});
             },
             // zig fmt: off
@@ -121,6 +121,19 @@ pub fn runMachine(
                     const line = std.mem.trim(u8, rline, &std.ascii.whitespace);
                     acc = std.fmt.parseInt(Word, line, 10) catch |err|
                         return reporter.reportIp(cur_ip, "Failed to get integer: {s}", .{@errorName(err)});
+                },
+                inputString => {
+                    var buf: [100]u8 = undefined;
+                    const rline = stdin.readUntilDelimiter(&buf, '\n') catch |err|
+                        return reporter.reportIp(cur_ip, "Failed to read input: {s}", .{@errorName(err)});
+                    if (acc.? < 0) return reporter.reportIp(cur_ip, "ACC negative", .{});
+                    const addr: usize = @intCast(acc.?);
+                    if (addr + rline.len + 1 > memory.len)
+                        return reporter.reportIp(cur_ip, "Input string is too long", .{});
+                    for (rline, addr..) |byte, index| {
+                        memory[index] = byte;
+                    }
+                    memory[addr + rline.len] = 0;
                 },
                 else => {
                     return reporter.reportIp(cur_ip, "Call not implemented", .{});
