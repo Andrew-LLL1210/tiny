@@ -35,6 +35,6 @@ Requires [Zig master](https://github.com/ziglang/zig)
 
 ## Future
 
-- Automatic formatting of Tiny code [#17](https://github.com/Andrew-LLL1210/tiny/issues/17)
+- Automatic formatting of Tiny code: ([#17](https://github.com/Andrew-LLL1210/tiny/issues/17))
 - Semantic analysis of label structure
 - Semantic detection of common Tiny mistakes
