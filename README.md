@@ -30,11 +30,11 @@ Requires [Zig master](https://github.com/ziglang/zig)
 
 ## Usage
 
-- `tiny run [program.tny]`: assemble and run Tiny code (#17)
+- `tiny run [program.tny]`: assemble and run Tiny code
 - `tiny flow [program.tny]`: inspect the control flow of a Tiny program
 
 ## Future
 
-- Automatic formatting of Tiny code
+- Automatic formatting of Tiny code [#17](https://github.com/Andrew-LLL1210/tiny/issues/17)
 - Semantic analysis of label structure
 - Semantic detection of common Tiny mistakes
