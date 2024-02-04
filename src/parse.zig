@@ -102,7 +102,7 @@ pub fn printSkeleton(
     var label_table = LabelRefTable.init(alloc);
     defer label_table.deinit();
 
-    const DataType = enum { declaration, jmp, jg, jl, je, jge, jle, jne };
+    const DataType = enum { stop, ret, declaration, jmp, jg, jl, je, jge, jle, jne };
     var print_data = std.ArrayList(struct { usize, []const u8, DataType }).init(alloc);
     defer print_data.deinit();
 
@@ -125,6 +125,13 @@ pub fn printSkeleton(
 
             if (parsed_line.instruction) |instruction|
                 if (instruction == .operation) switch (instruction.operation.opcode) {
+                    .ret, .stop => |opcode| {
+                        try print_data.append(.{
+                            line_no,
+                            "",
+                            std.meta.stringToEnum(DataType, @tagName(opcode)).?,
+                        });
+                    },
                     .jmp, .jg, .jl, .je, .jge, .jle, .jne => |opcode| {
                         const label_name = instruction.operation.argument.label;
                         const res = try label_table.getOrPut(label_name);
@@ -147,19 +154,20 @@ pub fn printSkeleton(
     }
 
     for (print_data.items) |item| {
-        const line_no, const label_name = .{ item[0], item[1] };
-        if (!label_table.get(label_name).?.is_declared)
-            return reporter.reportErrorLine(line_no, "Unknown label '{s}'", .{label_name});
-    }
-
-    for (print_data.items) |item| {
         const line_no, const label_name, const opcode = .{ item[0], item[1], item[2] };
+
+        if (opcode == .ret or opcode == .stop) {
+            try out.print("{d: >3}:     {s}\n", .{ line_no, @tagName(opcode) });
+            continue;
+        }
+
         const label_data = label_table.get(label_name).?;
         var flag: u2 = 0;
         if (label_data.is_referenced_before) flag += 1;
         if (label_data.is_referenced_after) flag += 2;
 
-        const color: std.io.tty.Color = switch (flag) {
+        const color: std.io.tty.Color =
+            if (!label_data.is_declared) .red else switch (flag) {
             0 => .dim,
             1 => .white,
             2 => .cyan,
