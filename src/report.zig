@@ -13,14 +13,21 @@ pub const Reporter = struct {
     pub const ReportedError = error{ReportedError};
 
     pub fn reportIp(self: *const Reporter, ip: usize, comptime fmt: []const u8, args: anytype) ReportedError {
-        std.debug.print("error at ip {d}\n", .{ip});
-        const listing = self.listing orelse return self.reportErrorLine(444444, fmt, args);
+        const listing = self.listing orelse {
+            self.reportErrorLine(0, fmt, args) catch {};
+            // TODO make this a 'note'
+            return self.reportErrorLine(0, "Could not load listing to report runtime error", .{});
+        };
+
         const ix = @min(ip, listing.len - 1);
         for (0..ix + 1) |offset| {
             if (listing[ix - offset].ip == ip)
                 return self.reportErrorLine(listing[ix - offset].line_no, fmt, args);
         }
-        return self.reportErrorLine(777777, fmt, args);
+
+        self.reportErrorLine(0, fmt, args) catch {};
+        // TODO find nearest previous line and 'note' that instead of vague answer
+        return self.reportErrorLine(0, "Error occurred at an IP not found in the listing", .{});
     }
 
     pub fn setLineCol(self: *Reporter, line_no: usize, col_start: usize, col_end: usize) void {

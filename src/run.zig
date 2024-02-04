@@ -12,10 +12,8 @@ pub fn runMachine(
     var memory: [900]?Word = .{null} ** 900;
     var ip: u32 = 0;
     var acc: ?Word = null;
-    var sp: u32 = 899;
-    _ = sp;
-    var bp: u32 = 899;
-    _ = bp;
+    var sp: u32 = 900;
+    var bp: u32 = 900;
 
     for (listing) |entry| memory[entry.ip] = entry.word;
 
@@ -30,7 +28,7 @@ pub fn runMachine(
 
         const op = opFromCode(instruction / 1000) orelse
             return reporter.reportIp(cur_ip, "Invalid opcode {d}", .{instruction / 1000});
-        const arg = instruction % 1000;
+        const arg: u32 = instruction % 1000;
 
         // if acc need be nonnull for semantic reasons, let's assert that now
         switch (op) {
@@ -47,18 +45,19 @@ pub fn runMachine(
             // zig fmt: on
         }
 
+        const idk = "TODO: provide label name from reporter";
         // for any operations where arg refers to a label,
         // we can assume that arg is within bounds, since it was parsed successfully.
         switch (op) {
             .stop => return,
-            .ld => acc = memory[arg] orelse return reporter.reportIp(cur_ip, "Load of null value", .{}),
+            .ld => acc = memory[arg] orelse return reporter.reportIp(cur_ip, "Load of null value '{s}'", .{idk}),
             .st => memory[arg] = acc,
             .lda, .ld_imm => acc = @intCast(arg),
 
             // we won't worry about overflow until after the switch
-            .add => acc.? += memory[arg] orelse return reporter.reportIp(cur_ip, overflow_msg, .{}),
-            .sub => acc.? -= memory[arg] orelse return reporter.reportIp(cur_ip, overflow_msg, .{}),
-            .mul => acc.? *= memory[arg] orelse return reporter.reportIp(cur_ip, overflow_msg, .{}),
+            .add => acc.? += memory[arg] orelse return reporter.reportIp(cur_ip, null_argument_msg, .{idk}),
+            .sub => acc.? -= memory[arg] orelse return reporter.reportIp(cur_ip, null_argument_msg, .{idk}),
+            .mul => acc.? *= memory[arg] orelse return reporter.reportIp(cur_ip, null_argument_msg, .{idk}),
             .add_imm => acc.? += @intCast(arg),
             .sub_imm => acc.? -= @intCast(arg),
             .mul_imm => acc.? *= @intCast(arg),
@@ -96,13 +95,10 @@ pub fn runMachine(
             // zig fmt: on
 
             .call => switch (arg) {
-                900 => stdout.print("{d}", .{acc.?}) catch |err|
+                printInteger => stdout.print("{d}", .{acc.?}) catch |err|
                     return reporter.reportIp(cur_ip, "Failed to output: {s}", .{@errorName(err)}),
 
-                // TODO convert the rest of it
-                925 => {
-
-                    // printString
+                printString => {
                     if (acc.? < 0 or acc.? >= 900) return reporter.reportIp(cur_ip, "Bad address to string", .{});
                     var ix: u16 = @intCast(acc.?);
                     defer acc = ix;
@@ -114,6 +110,7 @@ pub fn runMachine(
                             return reporter.reportIp(cur_ip, "Failed to output: {s}", .{@errorName(err)});
                     }
                 },
+
                 inputInteger => {
                     var buf: [100]u8 = undefined;
                     const rline = stdin.readUntilDelimiter(&buf, '\n') catch |err|
@@ -122,6 +119,7 @@ pub fn runMachine(
                     acc = std.fmt.parseInt(Word, line, 10) catch |err|
                         return reporter.reportIp(cur_ip, "Failed to get integer: {s}", .{@errorName(err)});
                 },
+
                 inputString => {
                     var buf: [100]u8 = undefined;
                     const rline = stdin.readUntilDelimiter(&buf, '\n') catch |err|
@@ -135,12 +133,54 @@ pub fn runMachine(
                     }
                     memory[addr + rline.len] = 0;
                 },
+
                 else => {
-                    return reporter.reportIp(cur_ip, "Call not implemented", .{});
+                    if (arg >= 900) return reporter.reportIp(cur_ip, "Call to out of memory", .{});
+
+                    sp -= 2;
+                    memory[sp + 1] = @intCast(ip);
+                    memory[sp] = @intCast(bp);
+                    bp = sp;
+                    ip = arg;
                 },
             },
-            else => return reporter.reportIp(cur_ip, "{s} not implemented", .{@tagName(op)}),
+
+            .ret => {
+                // TODO detect stack underflow
+                sp = bp;
+                bp = @intCast(memory[sp].?);
+                ip = @intCast(memory[sp + 1].?);
+                sp += 2;
+            },
+
+            .push, .push_addr, .pusha => {
+                const value: Word = switch (op) {
+                    .push => acc.?,
+                    .push_addr => memory[arg].?,
+                    .pusha => @intCast(arg),
+                    else => unreachable,
+                };
+                sp -= 1;
+                memory[sp] = value;
+            },
+
+            .pop => {
+                acc = memory[sp];
+                sp += 1;
+            },
+
+            .pop_addr => {
+                memory[arg] = memory[sp];
+                sp += 1;
+            },
+
+            .ldparam => {
+                acc = memory[bp + arg + 1];
+            },
         }
+
+        if (acc) |value| if (value < -99999 or value > 99999)
+            return reporter.reportIp(cur_ip, "Integer overflow of {d}", .{value});
     }
 }
 
@@ -150,6 +190,7 @@ const Reporter = @import("report.zig").Reporter;
 const ReportedError = Reporter.ReportedError;
 
 const overflow_msg = "Overflow";
+const null_argument_msg = "Use of null value '{s}'";
 const non_exe_instruction_msg = "Reached a non-executable instruction at address {d}";
 
 const printInteger = 900;
