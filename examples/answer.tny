@@ -1,6 +1,0 @@
-jmp main
-answer: db 42
-main:
-    ld answer
-    call printInteger
-stop

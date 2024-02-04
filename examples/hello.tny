@@ -1,5 +1,0 @@
-lda message
-call printString
-stop
-
-message: dc "Hallo Welt\n"
