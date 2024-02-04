@@ -21,9 +21,9 @@ pub fn main() !void {
     _ = args_it.skip(); // skip binary name
 
     // get command
-    // one of "run" or "labels"
+    // one of "run" or "flow"
     const command = args_it.next() orelse {
-        try stderr.writeAll("expected command (run, labels)\n");
+        try stderr.writeAll("expected command (run, flow)\n");
         return error.IncorrectUsage;
     };
 
@@ -58,7 +58,7 @@ pub fn main() !void {
 
         reporter.listing = listing;
         try run.runMachine(listing, stdin, stdout, &reporter);
-    } else if (std.mem.eql(u8, command, "labels")) {
+    } else if (std.mem.eql(u8, command, "flow")) {
         try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
     } else {
         try stderr.print("{s} is not a command", .{command});
