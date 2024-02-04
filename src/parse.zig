@@ -86,6 +86,121 @@ pub fn parse(
     return listing.toOwnedSlice();
 }
 
+pub fn printSkeleton(
+    out: std.fs.File.Writer,
+    color_config: std.io.tty.Config,
+    source: []const u8,
+    reporter: *const Reporter,
+    alloc: std.mem.Allocator,
+) !void {
+    // TODO all these local var names are bad
+    const LabelRefTable = std.HashMap([]const u8, struct {
+        is_referenced_before: bool = false,
+        is_referenced_after: bool = false,
+        is_declared: bool = false,
+    }, CaseInsensitiveContext, 80);
+    var label_table = LabelRefTable.init(alloc);
+    defer label_table.deinit();
+
+    const DataType = enum { declaration, jmp, jg, jl, je, jge, jle, jne };
+    var print_data = std.ArrayList(struct { usize, []const u8, DataType }).init(alloc);
+    defer print_data.deinit();
+
+    // get every line with a jump or a label and print a cannonical representation
+    {
+        var lines = std.mem.splitScalar(u8, source, '\n');
+        var line_no: usize = 1;
+        while (lines.next()) |line| : (line_no += 1) {
+            const parsed_line = try parseLine(line, line_no, reporter);
+
+            if (parsed_line.label) |label_name| {
+                const res = try label_table.getOrPut(label_name);
+                if (!res.found_existing) res.value_ptr.* = .{};
+                if (res.value_ptr.is_declared)
+                    return reporter.reportErrorLine(line_no, "Duplicate label '{s}'", .{label_name});
+                res.value_ptr.is_declared = true;
+
+                try print_data.append(.{ line_no, label_name, .declaration });
+            }
+
+            if (parsed_line.instruction) |instruction|
+                if (instruction == .operation) switch (instruction.operation.opcode) {
+                    .jmp, .jg, .jl, .je, .jge, .jle, .jne => |opcode| {
+                        const label_name = instruction.operation.argument.label;
+                        const res = try label_table.getOrPut(label_name);
+                        if (!res.found_existing) res.value_ptr.* = .{};
+                        if (res.value_ptr.is_declared) {
+                            res.value_ptr.is_referenced_after = true;
+                        } else {
+                            res.value_ptr.is_referenced_before = true;
+                        }
+
+                        try print_data.append(.{
+                            line_no,
+                            label_name,
+                            std.meta.stringToEnum(DataType, @tagName(opcode)).?,
+                        });
+                    },
+                    else => {},
+                };
+        }
+    }
+
+    for (print_data.items) |item| {
+        const line_no, const label_name = .{ item[0], item[1] };
+        if (!label_table.get(label_name).?.is_declared)
+            return reporter.reportErrorLine(line_no, "Unknown label '{s}'", .{label_name});
+    }
+
+    for (print_data.items) |item| {
+        const line_no, const label_name, const opcode = .{ item[0], item[1], item[2] };
+        const label_data = label_table.get(label_name).?;
+        var flag: u2 = 0;
+        if (label_data.is_referenced_before) flag += 1;
+        if (label_data.is_referenced_after) flag += 2;
+
+        const color: std.io.tty.Color = switch (flag) {
+            0 => .dim,
+            1 => .white,
+            2 => .cyan,
+            3 => .yellow,
+        };
+
+        try color_config.setColor(out, color);
+        switch (opcode) {
+            .declaration => try out.print("{d: >3}: {s}:\n", .{ line_no, label_name }),
+            else => try out.print("{d: >3}:     {s} {s}\n", .{ line_no, @tagName(opcode), label_name }),
+        }
+        try color_config.setColor(out, .reset);
+    }
+}
+
+fn parseLabelName(label_name: []const u8) LabelSemantics {
+    if (endsWithIgnoreCase(label_name, "begin")) return .{ .begin = {} };
+    if (endsWithIgnoreCase(label_name, "else")) return .{ ._else = {} };
+    if (endsWithIgnoreCase(label_name, "end")) return .{ .end = {} };
+    if (beginsWithIgnoreCase(label_name, "while")) return .{ ._while = {} };
+    return .{ .none = {} };
+}
+
+fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    return std.ascii.eqlIgnoreCase(haystack[haystack.len - needle.len ..], needle);
+}
+
+fn beginsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    return std.ascii.eqlIgnoreCase(haystack[0..needle.len], needle);
+}
+
+const LabelSemantics = union(enum) {
+    none,
+    begin,
+    end,
+    _else,
+    _while,
+};
+
 fn parseLine(
     line: []const u8,
     line_no: usize,
