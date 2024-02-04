@@ -26,8 +26,12 @@ pub fn parse(
     var lines = std.mem.splitScalar(u8, source, '\n');
     var line_no: usize = 1;
     var ip: usize = 0;
+    var ok: bool = true;
     while (lines.next()) |line| : (line_no += 1) {
-        const parsed_line = try parseLine(line, line_no, reporter);
+        const parsed_line = parseLine(line, line_no, reporter) catch {
+            ok = false;
+            continue;
+        };
 
         if (parsed_line.label) |label_name| {
             const get_or_put = try label_table.getOrPut(label_name);
@@ -43,7 +47,10 @@ pub fn parse(
                 ip += 1;
             },
             .dc_directive => |string| {
-                const length = try encodeString(&listing, string, reporter, ip, line_no);
+                const length = encodeString(&listing, string, reporter, ip, line_no) catch {
+                    ok = false;
+                    continue;
+                };
                 ip += length;
             },
             .operation => |operation| {
@@ -62,12 +69,19 @@ pub fn parse(
         };
     }
 
+    if (!ok) return ReportedError.ReportedError;
+
     for (deferred_operations.items) |operation| {
         const label_line_no = listing.items[operation.index].line_no;
-        const label_address = label_table.get(operation.label_name) orelse
-            return reporter.reportErrorLine(label_line_no, "Label {s} does not exist", .{operation.label_name});
+        const label_address = label_table.get(operation.label_name) orelse {
+            reporter.reportErrorLine(label_line_no, "Label {s} does not exist", .{operation.label_name}) catch {};
+            ok = false;
+            continue;
+        };
         listing.items[operation.index].word += @intCast(label_address);
     }
+
+    if (!ok) return ReportedError.ReportedError;
 
     return listing.toOwnedSlice();
 }
