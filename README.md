@@ -30,7 +30,7 @@ Requires [Zig master](https://github.com/ziglang/zig)
 
 ## Usage
 
-- `tiny run [program.tny]`: assemble and run Tiny code
+- `tiny run [program.tny]`: assemble and run Tiny code (#17)
 - `tiny flow [program.tny]`: inspect the control flow of a Tiny program
 
 ## Future
