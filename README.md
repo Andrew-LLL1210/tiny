@@ -26,7 +26,7 @@ Requires [Zig master](https://github.com/ziglang/zig)
 
 1. Clone this repository (`https://github.com/Andrew-LLL1210/tiny`)
 2. Build with `zig build`
-  - use `zig build --help to see advanced build options`
+   (use `zig build --help` to see advanced build options)
 
 ## Usage
 
