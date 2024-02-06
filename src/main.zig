@@ -23,28 +23,42 @@ pub fn main() !void {
     // get command
     // one of "run" or "flow"
     const command = args_it.next() orelse {
-        try stderr.writeAll("expected command (run, flow)\n");
+        try stderr.writeAll("error: expected command (run, flow)\n");
         return error.IncorrectUsage;
     };
 
-    // get source
-    const file_name = args_it.next() orelse {
-        try stderr.writeAll("expected filename\n");
-        return error.IncorrectUsage;
-    };
-    const source = blk: {
+    // get source(s)
+    var source_list = std.ArrayList(u8).init(alloc);
+    errdefer source_list.deinit();
+    var files = std.ArrayList(report.FileData).init(alloc);
+    defer files.deinit();
+    while (args_it.next()) |file_name| {
         var file = try std.fs.cwd().openFile(file_name, .{});
         const fin = file.reader();
         defer file.close();
 
-        break :blk try fin.readAllAlloc(alloc, 20_000);
-    };
+        const len = source_list.items.len;
+        try fin.readAllArrayList(&source_list, 2_000);
+        try source_list.append('\n');
+        const contents = source_list.items[len..];
+        try files.append(report.FileData.init(
+            file_name,
+            len,
+            std.mem.count(u8, contents, "\n"),
+        ));
+    }
+    const source = try source_list.toOwnedSlice();
     defer alloc.free(source);
+
+    if (files.items.len == 0) {
+        try stderr.writeAll("error: expected source files\n");
+        return error.IncorrectUsage;
+    }
 
     // prepare Reporter
     var reporter = report.Reporter{
         .out = stderr,
-        .file_name = file_name,
+        .files = files.items,
         .source = source,
         .options = .{ .color_config = color_config },
     };
