@@ -71,7 +71,7 @@ pub fn runMachine(
             } else return reporter.reportIp(cur_ip, "Division by zero", .{}),
 
             .ldi => if (memory[arg]) |word| if (word >= 0 and word < memory.len) {
-                acc = memory[@intCast(word)];
+                acc = memory[@intCast(word)] orelse return reporter.reportIp(cur_ip, "Load of null value '{s}'", .{idk});
             } else return reporter.reportIp(cur_ip, "Attempt to read non-existant address {?d}", .{memory[arg]}),
             .sti => if (memory[arg]) |word| if (word >= 0 and word < memory.len) {
                 memory[@intCast(word)] = acc;
