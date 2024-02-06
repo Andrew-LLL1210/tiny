@@ -30,8 +30,9 @@ Requires [Zig master](https://github.com/ziglang/zig)
 
 ## Usage
 
-- `tiny run [program.tny]`: assemble and run Tiny code
-- `tiny flow [program.tny]`: inspect the control flow of a Tiny program
+- `tiny run program.tny`: assemble and run Tiny code
+  - `tiny run main.tny function.tny`: concatenate multiple Tiny files and run as one program
+- `tiny flow program.tny`: inspect the control flow of a Tiny program
 
 ## Future
 
