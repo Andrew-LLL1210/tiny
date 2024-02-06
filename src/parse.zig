@@ -27,46 +27,50 @@ pub fn parse(
     var line_no: usize = 1;
     var ip: usize = 0;
     var ok: bool = true;
-    while (lines.next()) |line| : (line_no += 1) {
-        const parsed_line = parseLine(line, line_no, reporter) catch {
-            ok = false;
-            continue;
-        };
+    while (lines.next()) |multiline| : (line_no += 1) {
+        const noncomment = @constCast(&std.mem.splitScalar(u8, multiline, ';')).first();
+        var splits = std.mem.splitScalar(u8, noncomment, '/');
+        while (splits.next()) |split| {
+            const parsed_line = parseLine(split, line_no, reporter) catch {
+                ok = false;
+                continue;
+            };
 
-        if (parsed_line.label) |label_name| {
-            const get_or_put = try label_table.getOrPut(label_name);
-            if (get_or_put.found_existing)
-                return reporter.reportErrorLine(line_no, "Duplicate Label \"{s}\"", .{label_name});
-            get_or_put.value_ptr.* = ip;
+            if (parsed_line.label) |label_name| {
+                const get_or_put = try label_table.getOrPut(label_name);
+                if (get_or_put.found_existing)
+                    return reporter.reportErrorLine(line_no, "Duplicate Label \"{s}\"", .{label_name});
+                get_or_put.value_ptr.* = ip;
+            }
+
+            if (parsed_line.instruction) |instruction| switch (instruction) {
+                .ds_directive => |length| ip += length,
+                .db_directive => |value| {
+                    try listing.append(.{ .ip = ip, .word = value, .line_no = line_no });
+                    ip += 1;
+                },
+                .dc_directive => |string| {
+                    const length = encodeString(&listing, string, reporter, ip, line_no) catch {
+                        ok = false;
+                        continue;
+                    };
+                    ip += length;
+                },
+                .operation => |operation| {
+                    try listing.append(.{
+                        .ip = ip,
+                        .word = operation.opcode.encode(operation.argument),
+                        .line_no = line_no,
+                    });
+
+                    if (operation.argument == .label) try deferred_operations.append(.{
+                        .index = listing.items.len - 1,
+                        .label_name = operation.argument.label,
+                    });
+                    ip += 1;
+                },
+            };
         }
-
-        if (parsed_line.instruction) |instruction| switch (instruction) {
-            .ds_directive => |length| ip += length,
-            .db_directive => |value| {
-                try listing.append(.{ .ip = ip, .word = value, .line_no = line_no });
-                ip += 1;
-            },
-            .dc_directive => |string| {
-                const length = encodeString(&listing, string, reporter, ip, line_no) catch {
-                    ok = false;
-                    continue;
-                };
-                ip += length;
-            },
-            .operation => |operation| {
-                try listing.append(.{
-                    .ip = ip,
-                    .word = operation.opcode.encode(operation.argument),
-                    .line_no = line_no,
-                });
-
-                if (operation.argument == .label) try deferred_operations.append(.{
-                    .index = listing.items.len - 1,
-                    .label_name = operation.argument.label,
-                });
-                ip += 1;
-            },
-        };
     }
 
     if (!ok) return ReportedError.ReportedError;
