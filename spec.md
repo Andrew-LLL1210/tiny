@@ -1,55 +1,30 @@
-# Spec
+# Tiny
 
-This is just a place to document all the hidden attributes of Tiny
-(or TIDE's implementation) in order to reproduce them faithfully if I want to.
+A toy assembler language from Harding University
 
-## Values
+## Virtual Machine Architecture
 
-- memory addresses are in range [0, 899]
-- registers and memory slots allowed in range [-99999, 99999]
-- argument of an operation in range [0, 999]
+The Tiny machine is 900 words, with each word's value in the range (-100000, 100000).
+The machine has 4 registers to keep track of its state:
+- the _instruction pointer_ (IP) which points to the next word to execute,
+- the _accumulator_ (ACC) which holds the current value for arithmetic and motion operations,
+- the _stack pointer_ (SP) which points to the bottom of the stack,
+- and the _base pointer_ (BP) which points to the stack frame of the currently evaluating function.
 
-## Edge Behavior
+The IP, SP, and BP all hold values in the range [0, 900).
+The ACC holds a word (-100000, 100000).
 
-TIDE:
-- division truncates (rounds towards zero) regardless of sign
-- when an overflow happens, the number is repeatedly decremented/incremented by 19999 until it fits in allowed range
-- attempting to access memory at a negative or large address is fatal
-Me:
-- overflows are fatal
+## Operations
+
+An operation is composed of an _operation code_ (opcode) and _argument_.
+In Tiny, opcodes are not written, but _mnemonics_ are used which correspond to opcodes.
+The argument may be either a number literal (in the range [0, 1000)) or a label name,
+depending on the operation. See the [list of all operations](#operation-list)
 
 ## Labels
 
-Labels are case insensitive. They may contain:
+## Directives
 
-TIDE:
-- any alphanumeric character
-- a pair of (single or double) quotation marks, not necessarily adjacent to each other (I think this is likely a bug in TIDE)
-- an escaped single or double quote (again, probably a bug)
-- a digit anywhere (including the beginning of the label)
-- literally any other graphical character
-Me:
-- any alphabetic character
-- underscore, ampersand
-- after the first character: square brackets, digits
+## Functions and Call Frames
 
-```tiny
-jmp 2-4'm'@!a#i"strin;g"\"[n\'$\-_}{
--!"wh]~\at"\+*$%)).,<>/?=^&(: ds 1
-2-4'm'@!a#i"strin;g"\"[n\'$\-_}{:
-stop
-```
-
-```tiny
-ld 7
-add 3
-call printInteger
-stop
-
-7: db 40
-3: db 2
-```
-
-## Strings
-
-- strings can be enclosed by either single or double quotes
+## Operation List
