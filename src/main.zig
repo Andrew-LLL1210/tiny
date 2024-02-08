@@ -38,7 +38,7 @@ pub fn main() !void {
         defer file.close();
 
         const len = source_list.items.len;
-        try fin.readAllArrayList(&source_list, 2_000);
+        try fin.readAllArrayList(&source_list, 20_000);
         try source_list.append('\n');
         const contents = source_list.items[len..];
         try files.append(report.FileData.init(
