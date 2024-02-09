@@ -47,14 +47,16 @@ pub const Parser = struct {
             // also I don't have good names for these things, that's why it's hard to think about.
         }
     }
-    pub const Parsec = union(enum) {
-        label: []const u8,
-        dc_directive: []const u8,
-        db_directive: Word,
-        ds_directive: u32,
-        operation: Operation,
-    };
+    pub const Parsec = union(enum) {};
 };
+
+pub const Statement = struct { pos: []const u8, action: union(enum) {
+    label: []const u8,
+    dc_directive: []const u8,
+    db_directive: Word,
+    ds_directive: u32,
+    operation: Operation,
+} };
 
 fn parseLine(
     line: []const u8,
