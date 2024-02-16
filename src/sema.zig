@@ -1,4 +1,6 @@
 /// turn a program IR into a machine listing
+pub fn assemble(parser: Parser, alloc: Allocator) !Listing {}
+
 pub fn parse(
     source: []const u8,
     reporter: *const Reporter,

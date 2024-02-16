@@ -2,207 +2,140 @@ const std = @import("std");
 
 pub const Parser = struct {
     source: []const u8,
-    src_lines: std.mem.SplitIterator(u8, '\n'),
-    tny_lines: std.mem.SplitIterator(u8, '/'),
-    line_no: usize,
-    reserve_instruction: ?Instruction,
     reporter: *const Reporter,
+    tokens: TokenIterator,
+
     pub fn init(source: []const u8, reporter: *const Reporter) Parser {
-        var src_lines = std.mem.splitScalar(u8, source, '\n');
-        const first_line_no_comment = std.mem.splitScalar(u8, src_lines.first(), ';').first();
-        var tny_lines = std.mem.splitScalar(u8, first_line_no_comment, '/');
         return .{
             .source = source,
-            .src_lines = src_lines,
-            .tny_lines = tny_lines,
-            .line_no = 1,
-            .reserve_instruction = null,
             .reporter = reporter,
+            .tokens = TokenIterator{ .src = source, .index = 0 },
         };
     }
-    pub fn nextInstruction(self: *Parser) ReportedError!?Parsec {
-        if (self.reserve_instruction) |res| {
-            defer self.reserve_instruction = null;
-            return res;
-        }
 
-        while (true) {
-            if (self.tny_lines.peek() == null) {
-                const src_line = self.src_lines.next() orelse return null;
-                const without_comment = std.mem.splitScalar(u8, src_line, ';').first();
-                self.tny_lines = std.mem.splitScalar(u8, without_comment, '/');
-                self.line_no += 1;
-            }
-            const line = self.tny_lines.next().?;
+    pub fn nextInstruction(self: *Parser) ReportedError!?Statement {
+        const tokens = &self.tokens;
 
-            const line_data = try parseLine(line, self.line_no, self.reporter);
-            if (line_data.label) |label_name| {
-                self.reserve_instruction = line_data.instruction;
-                // return label Parsec
-            }
+        const t1 = while (tokens.next()) |token| {
+            if (token != .newline) break token;
+        } else return null;
 
-            // if instruction return it
-            // TODO refactor the whole parser bc it's no good any more
-            // if I want a list of these 'parsecs' then I should just get that raw
-            // also I don't have good names for these things, that's why it's hard to think about.
-        }
+        if (t1 != .identifier) return error.IllegalToken;
+
+        const t2 = tokens.next() orelse return checkedOperation(t1, null);
+        _ = t2;
     }
-    pub const Parsec = union(enum) {};
+
+    fn checkedOperation(mnemonic: []const u8, argument: ?Token) !Statement {
+        _ = argument;
+        _ = mnemonic;
+    }
 };
 
-pub const Statement = struct { pos: []const u8, action: union(enum) {
-    label: []const u8,
-    dc_directive: []const u8,
-    db_directive: Word,
-    ds_directive: u32,
-    operation: Operation,
-} };
+pub const Statement = struct {
+    src: []const u8,
+    action: union(enum) {
+        label: []const u8,
+        dc_directive: []const u8,
+        db_directive: Word,
+        ds_directive: u32,
+        operation: Operation,
+    },
+};
 
-fn parseLine(
-    line: []const u8,
-    line_no: usize,
-    reporter: *const Reporter,
-) ReportedError!ProcessedLine {
-    var tokens = Tokenizer{ .line = line, .reporter = reporter, .line_no = line_no };
-    const token1 = try tokens.next() orelse return .{};
-    if (token1 != .identifier) return reporter.reportErrorLineCol(
-        line_no,
-        tokens.index - token1.length(),
-        tokens.index,
-        "Expected label or instruction, found {s}",
-        .{@tagName(token1)},
-    );
-
-    var label: ?[]const u8 = null;
-    var mnemonic: []const u8 = token1.identifier;
-    var m_argument: ?Token = try tokens.next();
-
-    if (m_argument) |token2| if (token2 == .colon) {
-        label = token1.identifier;
-        mnemonic = switch (try tokens.next() orelse return .{ .label = label }) {
-            .identifier => |source| source,
-            else => |token| return reporter.reportErrorLineCol(
-                line_no,
-                tokens.index - token.length(),
-                tokens.index,
-                "Expected instruction or end of line, found {s}",
-                .{@tagName(token)},
-            ),
-        };
-        m_argument = try tokens.next();
-        if (m_argument) |token4| if (token4 == .colon) {
-            const i = @intFromPtr(line.ptr) - @intFromPtr(mnemonic.ptr);
-            return reporter.reportErrorLineCol(line_no, i, tokens.index, "Only one label is allowed per line", .{});
-        };
-    };
-
-    if (try tokens.next()) |token| return reporter.reportErrorLineCol(
-        line_no,
-        tokens.index - token.length(),
-        tokens.index,
-        "Expected newline, found {s}",
-        .{@tagName(token)},
-    );
-
-    const mnemonic_ix = @intFromPtr(mnemonic.ptr) - @intFromPtr(line.ptr);
-    const opcode = mnemonic_map.get(mnemonic) orelse return reporter.reportErrorLineCol(
-        line_no,
-        mnemonic_ix + 1,
-        mnemonic_ix + mnemonic.len,
-        "Invalid operation mnemonic: {s}",
-        .{mnemonic},
-    );
-
-    @constCast(reporter).setLineCol(line_no, mnemonic_ix + 1, tokens.index);
-    return .{
-        .label = label,
-        .instruction = try Instruction.fromOpcode(opcode, m_argument, reporter),
-    };
-}
-
-const Tokenizer = struct {
-    line: []const u8,
+const TokenIterator = struct {
     index: usize = 0,
-    reporter: *const Reporter,
-    line_no: usize,
+    src: []const u8,
 
-    fn next(self: *Tokenizer) ReportedError!?Token {
-        const read = self.line[self.index..];
-        const start = std.mem.indexOfNone(u8, read, chars.whitespace) orelse return null;
-        if (read[start] == ';') return null;
-
-        if (read[start] == ':') {
-            self.index += start + 1;
-            return .{ .colon = {} };
-        }
-
-        if (std.mem.indexOfScalar(u8, chars.id_begin, read[start])) |_| {
-            const end = std.mem.indexOfNonePos(u8, read, start, chars.id) orelse read.len;
-            self.index += end;
-            return .{ .identifier = read[start..end] };
-        }
-
-        if (std.ascii.isDigit(read[start]) or read[start] == '-') {
-            const end = std.mem.indexOfNonePos(u8, read, start, chars.digits) orelse read.len;
-            if (end - start > 6) return self.reporter.reportErrorLineCol(
-                self.line_no,
-                self.index + start,
-                self.index + end,
-                "Number literal is too large",
-                .{},
-            );
-            self.index += end;
-            return .{ .number = read[start..end] };
-        }
-
-        if (read[start] == '"' or read[start] == '\'') {
-            var escape = true;
-            const len = for (read[start..], 1..) |char, _len| {
-                if (escape) {
-                    escape = false;
-                    continue;
-                }
-                if (char == read[start]) break _len;
-                if (char == '\\') escape = true;
-            } else return self.reporter.reportErrorLineCol(
-                self.line_no,
-                self.index + start,
-                self.line.len,
-                "Unclosed string",
-                .{},
-            );
-            self.index += start + len;
-            return .{ .string = read[start..][0..len] };
-        }
-
-        return self.reporter.reportErrorLineCol(
-            self.line_no,
-            self.index + start,
-            self.index + start,
-            "Illegal character {x:02}",
-            .{read[start]},
-        );
+    fn hasStatementSeparator(self: *TokenIterator) bool {
+        self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return true;
+        return switch (self.src[self.index]) {
+            ';', '\r', '\n', '/' => true,
+            else => false,
+        };
     }
 
-    const chars = struct {
-        const whitespace = " \t\r";
-        const id = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_&[]0123456789";
-        const id_begin = id[0 .. 26 * 2 + 2];
-        const digits = "0123456789";
-    };
+    fn next(self: *TokenIterator) ReportedError!?Token {
+        self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return null;
+
+        const src = self.src;
+        const start = self.index;
+        var end: usize = self.index;
+        defer self.index = end;
+
+        switch (src[start]) {
+            ';', '\r', '\n' => {
+                end = 1 + mem.indexOfScalarPos(u8, src, start, '\n') orelse return null;
+                return Token.init(src[start..end], .newline);
+            },
+            '/' => {
+                end = start + 1;
+                return Token.init(src[start..end], .newline);
+            },
+            ':' => {
+                end = start + 1;
+                return Token.init(src[start..end], .colon);
+            },
+            'A'...'Z', 'a'...'z', '_', '&' => {
+                end = for (src[start..], start..) |c, i| switch (c) {
+                    'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9' => {},
+                    else => break i,
+                };
+
+                //boundary condition
+                switch (src[end]) {
+                    '-' => return error.IllegalIdentifierCharacter,
+                    else => {},
+                }
+
+                return Token.init(src[start..end], .identifier);
+            },
+            '-', '0'...'9' => {
+                end = std.mem.indexOfNonePos(u8, src, start, "0123456789") orelse src.len;
+                const max_len = if (src[start] == '-') 6 else 5;
+                if (end - start > max_len) return error.NumberLiteralTooLong;
+
+                // boundary condition
+                switch (src[end]) {
+                    'A'...'Z', 'a'...'z', '_', '&' => return error.IllegalNumberCharacter,
+                    else => {},
+                }
+
+                return Token.init(src[start..end], .number);
+            },
+            '"', '\'' => {
+                var escape = true;
+                end = for (src[start..], start..) |c, i| if (escape == false) switch (c) {
+                    '0', 'r', 'n', 't', '"', '\'' => escape = false,
+                    else => return error.IllegalEscapeCode,
+                } else switch (c) {
+                    '\\' => escape = true,
+                    '"', '\'' => if (c == src[start]) break i,
+                    else => {},
+                };
+                // TODO maybe enforce boundary condition? caller should be ok anyway
+
+                return Token.init(src[start..end], .string);
+            },
+            else => return error.IllegalCharacter,
+        }
+    }
 };
 
-const Token = union(enum) {
-    identifier: []const u8,
-    number: []const u8,
-    string: []const u8,
-    colon,
+const Token = struct {
+    src: []const u8,
+    kind: Kind,
 
-    fn length(token: Token) usize {
-        return switch (token) {
-            .identifier, .number, .string => |source| source.len,
-            .colon => 1,
-        };
+    const Kind = enum {
+        identifier,
+        number,
+        string,
+        colon,
+        newline,
+    };
+
+    fn init(src: []const u8, kind: Kind) Token {
+        return .{ .src = src, .kind = kind };
     }
 };
 
@@ -422,3 +355,4 @@ const mnemonic_map: type = std.ComptimeStringMapWithEql(Opcode,
 }, std.ascii.eqlIgnoreCase);
 
 const Ternary = enum { yes, no, maybe };
+const mem = std.mem;
