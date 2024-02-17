@@ -2,123 +2,101 @@ const std = @import("std");
 
 pub const Parser = struct {
     source: []const u8,
-    reporter: *const Reporter,
     tokens: TokenIterator,
 
-    pub fn init(source: []const u8, reporter: *const Reporter) Parser {
+    pub fn init(source: []const u8) Parser {
         return .{
             .source = source,
-            .reporter = reporter,
             .tokens = TokenIterator{ .src = source, .index = 0 },
         };
     }
 
-    pub fn nextInstruction(self: *Parser) ReportedError!?Statement {
+    pub fn nextInstruction(self: *Parser) !?Statement {
         const tokens = &self.tokens;
 
-        const t1 = while (tokens.next()) |token| {
-            if (token != .newline) break token;
+        const identifier_token = while (try tokens.next()) |token| {
+            if (token.kind != .newline) break token;
         } else return null;
 
-        if (t1 != .identifier) return error.IllegalToken;
+        if (identifier_token.kind != .identifier) return error.IllegalToken;
+        const identifier = identifier_token.src;
 
-        const t2 = tokens.next() orelse return checkedOperation(t1, null);
-        _ = t2;
-    }
+        const t2 = try tokens.next() orelse Token{ .src = identifier, .kind = .newline };
 
-    fn checkedOperation(mnemonic: []const u8, argument: ?Token) !Statement {
-        _ = argument;
-        _ = mnemonic;
+        const action: Statement.Action = switch (t2.kind) {
+            .colon => .{ .label = identifier },
+            else => action: {
+                const opcode = mnemonic_map.get(identifier) orelse
+                    return error.InvalidMnemonic;
+
+                break :action switch (opcode) {
+                    .dc => if (t2.kind == .string)
+                        .{ .dc_directive = t2.src }
+                    else
+                        return error.ExpectedString,
+                    .db => if (t2.kind == .number)
+                        .{ .db_directive = try parseWord(t2.src) }
+                    else
+                        return error.ExpectedNumber,
+                    .ds => if (t2.kind == .number)
+                        .{ .db_directive = try parseWord(t2.src) }
+                    else
+                        return error.ExpectedNumber,
+                    else => op: {
+                        const argument = try Argument.from(t2);
+                        if (!opcode.takesArgument(argument)) return error.InvalidArgument;
+                        break :op .{ .operation = .{ .opcode = opcode, .argument = argument } };
+                    },
+                };
+            },
+        };
+
+        if (!tokens.hasNewlineOrEnd()) {
+            _ = try tokens.next(); // for reporting correct token
+            return error.TrailingToken;
+        }
+
+        return .{
+            .src = joinSlices(identifier, t2.src),
+            .action = action,
+        };
     }
 };
 
+pub const Listing = []const ListingEntry;
+pub const ListingEntry = struct { ip: usize, word: Word, line_no: usize };
+
 pub const Statement = struct {
     src: []const u8,
-    action: union(enum) {
+    action: Action,
+    const Action = union(enum) {
         label: []const u8,
         dc_directive: []const u8,
         db_directive: Word,
         ds_directive: u32,
         operation: Operation,
-    },
+    };
 };
 
-const TokenIterator = struct {
-    index: usize = 0,
-    src: []const u8,
+pub const Operation = struct {
+    opcode: Opcode,
+    argument: Argument,
+};
 
-    fn hasStatementSeparator(self: *TokenIterator) bool {
-        self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return true;
-        return switch (self.src[self.index]) {
-            ';', '\r', '\n', '/' => true,
-            else => false,
+const ArgumentKind = enum { none, number, label };
+
+const Argument = union(ArgumentKind) {
+    none,
+    number: u32,
+    label: []const u8,
+
+    fn from(token: Token) !Argument {
+        return switch (token.kind) {
+            .identifier => .{ .label = token.src },
+            .number => .{ .number = try parseAddress(token.src) },
+            .newline => .{ .none = {} },
+            .string, .colon => unreachable,
         };
-    }
-
-    fn next(self: *TokenIterator) ReportedError!?Token {
-        self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return null;
-
-        const src = self.src;
-        const start = self.index;
-        var end: usize = self.index;
-        defer self.index = end;
-
-        switch (src[start]) {
-            ';', '\r', '\n' => {
-                end = 1 + mem.indexOfScalarPos(u8, src, start, '\n') orelse return null;
-                return Token.init(src[start..end], .newline);
-            },
-            '/' => {
-                end = start + 1;
-                return Token.init(src[start..end], .newline);
-            },
-            ':' => {
-                end = start + 1;
-                return Token.init(src[start..end], .colon);
-            },
-            'A'...'Z', 'a'...'z', '_', '&' => {
-                end = for (src[start..], start..) |c, i| switch (c) {
-                    'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9' => {},
-                    else => break i,
-                };
-
-                //boundary condition
-                switch (src[end]) {
-                    '-' => return error.IllegalIdentifierCharacter,
-                    else => {},
-                }
-
-                return Token.init(src[start..end], .identifier);
-            },
-            '-', '0'...'9' => {
-                end = std.mem.indexOfNonePos(u8, src, start, "0123456789") orelse src.len;
-                const max_len = if (src[start] == '-') 6 else 5;
-                if (end - start > max_len) return error.NumberLiteralTooLong;
-
-                // boundary condition
-                switch (src[end]) {
-                    'A'...'Z', 'a'...'z', '_', '&' => return error.IllegalNumberCharacter,
-                    else => {},
-                }
-
-                return Token.init(src[start..end], .number);
-            },
-            '"', '\'' => {
-                var escape = true;
-                end = for (src[start..], start..) |c, i| if (escape == false) switch (c) {
-                    '0', 'r', 'n', 't', '"', '\'' => escape = false,
-                    else => return error.IllegalEscapeCode,
-                } else switch (c) {
-                    '\\' => escape = true,
-                    '"', '\'' => if (c == src[start]) break i,
-                    else => {},
-                };
-                // TODO maybe enforce boundary condition? caller should be ok anyway
-
-                return Token.init(src[start..end], .string);
-            },
-            else => return error.IllegalCharacter,
-        }
     }
 };
 
@@ -137,105 +115,6 @@ const Token = struct {
     fn init(src: []const u8, kind: Kind) Token {
         return .{ .src = src, .kind = kind };
     }
-};
-
-const ProcessedLine = struct {
-    label: ?[]const u8 = null,
-    instruction: ?Instruction = null,
-};
-
-const Instruction = union(enum) {
-    ds_directive: usize,
-    db_directive: Word,
-    dc_directive: []const u8,
-    operation: struct { argument: Argument, opcode: Opcode },
-
-    fn fromOpcode(
-        opcode: Opcode,
-        m_argument: ?Token,
-        reporter: *const Reporter,
-    ) ReportedError!Instruction {
-        // precondition: argument is not a .colon token
-        if (m_argument) |argument| switch (opcode) {
-            .ds => if (argument == .number) return .{ .ds_directive = try parseAddress(argument.number, reporter) },
-            .db => if (argument == .number) return .{ .db_directive = try parseWord(argument.number, reporter) },
-            .dc => if (argument == .string) return .{ .dc_directive = argument.string },
-            else => {},
-        };
-        if (m_argument) |argument| if (argument == .string)
-            return reporter.reportHere("Strings are only accepted on the dc directive", .{});
-        switch (opcode) {
-            .ds, .db, .dc => return reporter.reportHere("Invalid use of {s}", .{@tagName(opcode)}),
-            else => {},
-        }
-
-        const argument = try Argument.from(m_argument, reporter);
-        if (opcode.takesArgument(argument)) return .{ .operation = .{ .argument = argument, .opcode = opcode } };
-        return reporter.reportHere("{s} operation does not take a {s} argument", .{
-            @tagName(opcode),
-            @tagName(argument),
-        });
-    }
-};
-
-const Word = @import("run.zig").Word;
-const Reporter = @import("report.zig").Reporter;
-const ReportedError = Reporter.ReportedError;
-
-const LabelTable = std.HashMap([]const u8, usize, CaseInsensitiveContext, 80);
-const CaseInsensitiveContext = struct {
-    pub fn hash(_: @This(), key: []const u8) u64 {
-        var wh = std.hash.Wyhash.init(0);
-        for (key) |char| {
-            if (std.ascii.isLower(char)) {
-                const e = char - ('a' - 'A');
-                wh.update(std.mem.asBytes(&e));
-            } else {
-                wh.update(std.mem.asBytes(&char));
-            }
-        }
-        return wh.final();
-    }
-
-    pub fn eql(_: @This(), a: []const u8, b: []const u8) bool {
-        return std.ascii.eqlIgnoreCase(a, b);
-    }
-};
-
-const Argument = union(enum) {
-    none,
-    number: u32,
-    label: []const u8,
-
-    fn from(m_token: ?Token, reporter: *const Reporter) ReportedError!Argument {
-        if (m_token) |token| switch (token) {
-            .identifier => |label| return .{ .label = label },
-            .number => |label| return .{ .number = try parseAddress(label, reporter) },
-            .string => unreachable,
-            .colon => unreachable,
-        } else return .{ .none = {} };
-    }
-};
-
-fn parseAddress(source: []const u8, reporter: *const Reporter) ReportedError!u32 {
-    if (source[0] == '-')
-        return reporter.reportHere("Negative number cannot be used as an argument here", .{});
-    const val = std.fmt.parseUnsigned(u32, source, 10) catch unreachable;
-    if (val > 999)
-        return reporter.reportHere("Argument value must be in range [0, 999]", .{});
-    return val;
-}
-
-fn parseWord(source: []const u8, reporter: *const Reporter) ReportedError!Word {
-    const val = std.fmt.parseInt(Word, source, 10) catch unreachable;
-    if (val < -99999 or val > 99999)
-        return reporter.reportHere("Word value must be in range [-99999, 99999]", .{});
-    return val;
-}
-
-pub const Operation = struct {
-    opcode: Opcode,
-    argument: Argument,
 };
 
 pub const Opcode = enum(u32) {
@@ -292,7 +171,7 @@ pub const Opcode = enum(u32) {
         switch (argument) {
             .none => return opcode.hasArgument() != .yes,
             .label => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .yes,
-            .immediate => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .no,
+            .number => return opcode.hasArgument() != .no and opcode.isArgumentNumerical() != .no,
         }
     }
 
@@ -326,6 +205,113 @@ pub const Opcode = enum(u32) {
         }
     }
 };
+
+const TokenIterator = struct {
+    index: usize = 0,
+    src: []const u8,
+
+    fn hasNewlineOrEnd(self: *TokenIterator) bool {
+        self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return true;
+        return switch (self.src[self.index]) {
+            ';', '\r', '\n', '/' => true,
+            else => false,
+        };
+    }
+
+    fn next(self: *TokenIterator) !?Token {
+        self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return null;
+
+        const src = self.src;
+        const start = self.index;
+        var end: usize = self.index;
+        defer self.index = end;
+
+        switch (src[start]) {
+            ';', '\r', '\n' => {
+                end = 1 + (mem.indexOfScalarPos(u8, src, start, '\n') orelse return null);
+                return Token.init(src[start..end], .newline);
+            },
+            '/' => {
+                end = start + 1;
+                return Token.init(src[start..end], .newline);
+            },
+            ':' => {
+                end = start + 1;
+                return Token.init(src[start..end], .colon);
+            },
+            'A'...'Z', 'a'...'z', '_', '&' => {
+                end = for (src[start..], start..) |c, i| switch (c) {
+                    'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9' => {},
+                    else => break i,
+                } else src.len;
+
+                //boundary condition
+                if (end < src.len) switch (src[end]) {
+                    '-' => return error.IllegalIdentifierCharacter,
+                    else => {},
+                };
+
+                return Token.init(src[start..end], .identifier);
+            },
+            '-', '0'...'9' => {
+                end = std.mem.indexOfNonePos(u8, src, start, "0123456789") orelse src.len;
+                const max_len: usize = if (src[start] == '-') 6 else 5;
+                if (end - start > max_len) return error.NumberLiteralTooLong;
+
+                // boundary condition
+                if (end < src.len) switch (src[end]) {
+                    'A'...'Z', 'a'...'z', '_', '&' => return error.IllegalNumberCharacter,
+                    else => {},
+                };
+
+                return Token.init(src[start..end], .number);
+            },
+            '"', '\'' => {
+                var escape = true;
+                end = for (src[start..], start..) |c, i| (if (escape == false) switch (c) {
+                    '0', 'r', 'n', 't', '"', '\'' => escape = false,
+                    else => return error.IllegalEscapeCode,
+                } else switch (c) {
+                    '\\' => escape = true,
+                    '"', '\'' => if (c == src[start]) break i,
+                    else => {},
+                }) else src.len;
+                // TODO maybe enforce boundary condition? caller should be ok anyway
+
+                return Token.init(src[start..end], .string);
+            },
+            else => return error.IllegalCharacter,
+        }
+    }
+};
+
+const Word = @import("run.zig").Word;
+const Reporter = @import("report.zig").Reporter;
+const ReportedError = Reporter.ReportedError;
+
+fn parseAddress(source: []const u8) !u32 {
+    if (source[0] == '-')
+        return error.NegativeAddress;
+    const val = std.fmt.parseUnsigned(u32, source, 10) catch unreachable;
+    if (val > 999)
+        return error.AddressOutOfRange;
+    return val;
+}
+
+fn parseWord(source: []const u8) !Word {
+    const val = std.fmt.parseInt(Word, source, 10) catch unreachable;
+    if (val < -99999 or val > 99999)
+        return error.WordOutOfRange;
+    return val;
+}
+
+/// Returns the slice beginning at `a[0]` and ending at `b[b.len]`.
+/// Assumes slices are in the same string and nonoverlapping.
+fn joinSlices(a: []const u8, b: []const u8) []const u8 {
+    const a_unsafe: [*]const u8 = @ptrCast(a);
+    const size: usize = @intFromPtr(b.ptr) - @intFromPtr(a.ptr) + b.len;
+    return a_unsafe[0..size];
+}
 
 // const ArgumentData = struct { none: bool, label: bool, number: bool };
 
@@ -370,3 +356,24 @@ const mnemonic_map: type = std.ComptimeStringMapWithEql(Opcode,
 
 const Ternary = enum { yes, no, maybe };
 const mem = std.mem;
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
+
+test {
+    const src =
+        \\jmp main
+        \\main:
+        \\    call 3
+    ;
+
+    var parser = Parser.init(src);
+    try expect(.operation == (try parser.nextInstruction()).?.action);
+    try expect(.label == (try parser.nextInstruction()).?.action);
+    try expectError(error.InvalidArgument, parser.nextInstruction());
+}
+
+const expect = std.testing.expect;
+const expectEqual = std.testing.expectEqual;
+const expectError = std.testing.expectError;
