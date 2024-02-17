@@ -1,5 +1,48 @@
 /// turn a program IR into a machine listing
-pub fn assemble(parser: Parser, alloc: Allocator) !Listing {}
+pub fn assemble(parser: Parser, alloc: Allocator) !Listing {
+    var listing = ArrayList(ListingEntry).init(alloc);
+    errdefer listing.deinit();
+    var label_table = HashMap(u32).init(alloc);
+    defer label_tabel.deinit();
+    var deferred_labels = ArrayList(DeferredLabelData).init(alloc);
+    defer deferred_labels.deinit();
+
+    try label_table.putNoClobber("printInteger", 900);
+    try label_table.putNoClobber("printString", 925);
+    try label_table.putNoClobber("inputInteger", 950);
+    try label_table.putNoClobber("inputString", 975);
+
+    while (try parser.nextInstruction()) |instruction| switch (instruction.action) {
+        .label => |label_name| {
+            const get_or_put = try label_table.getOrPut(label_name);
+            if (get_or_put.found_existing) return error.DuplicateLabel;
+            get_or_put.value_ptr.* = listing.items.len;
+        },
+        .dc_directive => |string| try assembleString(string, listing),
+        .db_directive => |word| try listing.append(.{ instruction, word }),
+        .ds_directive => |size| try listing.appendNTimes(.{ instruction, null }, size),
+        .operation => |operation| switch (operation.argument) {
+            .none, .number => {
+                try listing.append(.{ instruction, try operation.reify() });
+            },
+            .label => {
+                try deferred_labels.append(.{ instruction, listing.items.len });
+                _ = try listing.addOne();
+            },
+        },
+    };
+
+    for (deferred_labels.items) |entry| {
+        listing.items[entry.index] = try entry.instruction.reifyWithTable(label_table);
+    }
+
+    return listing.toOwnedSlice();
+}
+
+const parse = @import("parse.zig");
+const Parser = parse.Parser;
+const Statement = parse.Statement;
+const HashMap = @import("insensitive.zig").HashMap;
 
 pub fn parse(
     source: []const u8,

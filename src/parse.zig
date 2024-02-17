@@ -204,13 +204,13 @@ const CaseInsensitiveContext = struct {
 
 const Argument = union(enum) {
     none,
-    immediate: u32,
+    number: u32,
     label: []const u8,
 
     fn from(m_token: ?Token, reporter: *const Reporter) ReportedError!Argument {
         if (m_token) |token| switch (token) {
             .identifier => |label| return .{ .label = label },
-            .number => |label| return .{ .immediate = try parseAddress(label, reporter) },
+            .number => |label| return .{ .number = try parseAddress(label, reporter) },
             .string => unreachable,
             .colon => unreachable,
         } else return .{ .none = {} };
@@ -233,12 +233,12 @@ fn parseWord(source: []const u8, reporter: *const Reporter) ReportedError!Word {
     return val;
 }
 
-const Operation = struct {
+pub const Operation = struct {
     opcode: Opcode,
-    argument: u32,
+    argument: Argument,
 };
 
-const Opcode = enum(u32) {
+pub const Opcode = enum(u32) {
     stop,
     ld,
     ldi,
@@ -296,6 +296,18 @@ const Opcode = enum(u32) {
         }
     }
 
+    // TODO why on earth was I doing this; it isn't broken I just don't like it
+    //    fn arguments(opcode: Opcode) ArgumentData {
+    //        var argument_data : ArgumentData  = undefined;
+    //        argument_data.none = switch(opcode) {
+    //            .stop, .in, .out, .ret, .push, .pop => true,
+    //            else => false,
+    //        };
+    //        argument_data.label = switch(opcode) {
+    //            .stop
+    //        }
+    //    }
+
     fn encode(
         opcode: Opcode,
         argument: Argument,
@@ -314,6 +326,8 @@ const Opcode = enum(u32) {
         }
     }
 };
+
+// const ArgumentData = struct { none: bool, label: bool, number: bool };
 
 const mnemonic_map: type = std.ComptimeStringMapWithEql(Opcode,
 //blk: {
