@@ -1,0 +1,5 @@
+flesh out src/sema.zig:assemble()
+factor state out of src/run.zig:runMachine()
+rework reporter to report based off of factored states and error codes
+remove all reporter.report() in internal code
+
