@@ -34,6 +34,7 @@ pub fn runMachine(
         const memory = &m.memory;
         const cur_ip = m.ip;
         var next_ip = cur_ip + 1;
+        errdefer m.ip = cur_ip;
         defer m.ip = next_ip;
 
         const instruction: u32 = @intCast(m_.?);

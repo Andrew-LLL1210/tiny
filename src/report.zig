@@ -50,6 +50,12 @@ pub const Reporter = struct {
         return .{ FileData.init("???", 0, 0), 0 };
     }
 
+    pub fn setSrcByIp(self: *Reporter, ip: usize, listing: sema.Listing) void {
+        if (ip >= listing.len) {
+            self.src = self.src[0..0];
+        } else self.src = listing[ip].src;
+    }
+
     const Options = struct {
         color_config: std.io.tty.Config,
     };

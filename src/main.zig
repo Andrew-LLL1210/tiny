@@ -66,18 +66,17 @@ pub fn main() !void {
 
     // dispatch command
     if (std.mem.eql(u8, command, "run")) {
-
-        // Get listing from parser
         var parser = parse.Parser.init(source);
-
         const listing = sema.assemble(&parser, alloc, &reporter.src) catch |err|
             return reporter.reportError(err);
         defer alloc.free(listing);
 
         var machine = run.Machine.load(listing);
-        try run.runMachine(&machine, stdin, stdout);
+        run.runMachine(&machine, stdin, stdout) catch |err| {
+            reporter.setSrcByIp(machine.ip, listing);
+            return reporter.reportError(err);
+        };
 
-        //        try run.runMachine(listing, stdin, stdout, &reporter);
         //    } else if (std.mem.eql(u8, command, "flow")) {
         //        try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
     } else if (std.mem.eql(u8, command, "lex")) {
