@@ -16,67 +16,11 @@ pub const Reporter = struct {
     files: []const FileData,
     source: []const u8,
     options: Options,
-    listing: ?sema.Listing = null,
+    src: []const u8,
 
-    location: [3]usize = .{ 0, 0, 0 },
-
-    pub const ReportedError = error{ReportedError};
-
-    pub fn reportIp(self: *const Reporter, ip: usize, comptime fmt: []const u8, args: anytype) ReportedError {
-        const listing = self.listing orelse {
-            self.reportErrorLine(0, fmt, args) catch {};
-            // TODO make this a 'note'
-            return self.reportErrorLine(0, "Could not load listing to report runtime error", .{});
-        };
-
-        const ix = @min(ip, listing.len - 1);
-        for (0..ix + 1) |offset| {
-            if (listing[ix - offset].ip == ip)
-                return self.reportErrorLine(listing[ix - offset].line_no, fmt, args);
-        }
-
-        self.reportErrorLine(0, fmt, args) catch {};
-        // TODO find nearest previous line and 'note' that instead of vague answer
-        return self.reportErrorLine(0, "Error occurred at an IP not found in the listing", .{});
-    }
-
-    pub fn setLineCol(self: *Reporter, line_no: usize, col_start: usize, col_end: usize) void {
-        self.location = .{ line_no, col_start, col_end };
-    }
-
-    pub fn reportHere(self: *const Reporter, comptime fmt: []const u8, args: anytype) ReportedError {
-        return self.reportErrorLineCol(self.location[0], self.location[1], self.location[2], fmt, args);
-    }
-
-    pub fn reportErrorLine(
-        self: *const Reporter,
-        line_no: usize,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) ReportedError {
-        return self.reportErrorLineCol(line_no, 0, 0, fmt, args);
-    }
-
-    pub fn reportErrorLineCol(
-        self: *const Reporter,
-        line_no: usize,
-        col_start: usize,
-        col_end: usize,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) ReportedError {
-        self.reportErrorRaw(line_no, col_start, col_end, fmt, args) catch {};
-        return ReportedError.ReportedError;
-    }
-
-    fn reportErrorRaw(
-        self: *const Reporter,
-        global_line_no: usize,
-        col_start: usize,
-        col_end: usize,
-        comptime fmt: []const u8,
-        args: anytype,
-    ) !void {
+    pub fn reportError(self: *const Reporter, err: anyerror) !void {
+        const src = self.src;
+        const global_line_no = std.mem.count(u8, before(self.source, src), "\n") + 1;
         const file, const line_no = self.getFileAndLine(global_line_no);
 
         const config = self.options.color_config;
@@ -86,21 +30,13 @@ pub const Reporter = struct {
         try config.setColor(self.out, .bright_white);
         try self.out.print("{s}:{d}: ", .{ file.name, line_no });
         try config.setColor(self.out, .bright_red);
-        try self.out.writeAll("error: ");
-        try config.setColor(self.out, .bright_white);
-        try self.out.print(fmt ++ "\n", args);
-
-        if (line_no == 0) return;
+        try self.out.print("{s}\n", .{@errorName(err)});
         try config.setColor(self.out, .reset);
-        var line_it = std.mem.splitScalar(u8, self.source[file.pos..], '\n');
-        for (1..line_no) |_| _ = line_it.next();
-        if (line_it.next()) |line| try self.out.print("{s}\n", .{line});
 
-        if (col_start == 0) return;
+        const line = getLine(self.source, src);
+        try self.out.print("{s}\n", .{line});
         try config.setColor(self.out, .green);
-        try self.out.writeByteNTimes(' ', col_start - 1);
-        try self.out.writeByteNTimes('~', col_end - col_start + 1);
-        try self.out.writeAll("\n");
+        try underline(line, src, 8, '^', self.out); // TODO detect tab-width
     }
 
     fn getFileAndLine(self: *const Reporter, line: usize) struct { FileData, usize } {
@@ -118,3 +54,30 @@ pub const Reporter = struct {
         color_config: std.io.tty.Config,
     };
 };
+
+fn index(string: []const u8, slice: []const u8) usize {
+    return @intFromPtr(slice.ptr) - @intFromPtr(string.ptr);
+}
+
+/// assumes that slice is a slice of string
+fn before(string: []const u8, slice: []const u8) []const u8 {
+    return string[0..index(string, slice)];
+}
+
+/// assumes that slice is a slice of string
+fn getLine(string: []const u8, slice: []const u8) []const u8 {
+    const ix = index(string, slice);
+    const start = for (0..ix) |off| (if (string[ix - off] == '\n') break ix - off + 1) else 0;
+    const end = for (start..string.len) |i| (if (string[i] == '\n') break i) else string.len;
+
+    return string[start..end];
+}
+
+fn underline(string: []const u8, slice: []const u8, tabwidth: usize, char: u8, out: anytype) !void {
+    const ix = index(string, slice);
+    const tab_count = std.mem.count(u8, string, "\t");
+    const pre_width = ix - tab_count + tab_count * tabwidth;
+    try out.writeByteNTimes(' ', pre_width);
+    try out.writeByteNTimes(char, slice.len);
+    try out.writeByte('\n');
+}

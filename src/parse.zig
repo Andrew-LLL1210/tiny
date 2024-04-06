@@ -12,10 +12,10 @@ pub const Parser = struct {
         };
     }
 
-    pub fn nextInstruction(self: *Parser) !?Statement {
+    pub fn nextInstruction(self: *Parser, src: *[]const u8) !?Statement {
         const tokens = &self.tokens;
 
-        const identifier_token = while (try tokens.next()) |token| {
+        const identifier_token = while (try tokens.next(src)) |token| {
             if (token.kind != .newline) break token;
             self.state = .newline;
         } else return null;
@@ -24,7 +24,7 @@ pub const Parser = struct {
         if (identifier_token.kind != .identifier) return error.IllegalToken;
         const identifier = identifier_token.src;
 
-        const t2 = try tokens.next() orelse Token{ .src = identifier, .kind = .newline };
+        const t2 = try tokens.next(src) orelse Token{ .src = identifier, .kind = .newline };
 
         const action: Statement.Action = switch (t2.kind) {
             .colon => .{ .label = identifier },
@@ -54,6 +54,8 @@ pub const Parser = struct {
             },
         };
 
+        src.* = joinSlices(identifier, t2.src);
+
         if (action == .label and self.state == .label) return error.ExpectedNewline;
         self.state = switch (t2.kind) {
             .colon => .label,
@@ -62,7 +64,7 @@ pub const Parser = struct {
         };
 
         return .{
-            .src = joinSlices(identifier, t2.src),
+            .src = src.*,
             .action = action,
         };
     }
@@ -226,13 +228,14 @@ pub const TokenIterator = struct {
         };
     }
 
-    pub fn next(self: *TokenIterator) !?Token {
+    pub fn next(self: *TokenIterator, r: *[]const u8) !?Token {
         self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return null;
 
         const src = self.src;
         const start = self.index;
         var end: usize = self.index;
         defer self.index = end;
+        defer r.* = src[start..end];
 
         switch (src[start]) {
             ';', '\r', '\n' => {

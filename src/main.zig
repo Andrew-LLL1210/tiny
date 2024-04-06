@@ -6,11 +6,9 @@ const run = @import("run.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
-    //    const out_color_config = std.io.tty.detectConfig(std.io.getStdOut());
     const stdin = std.io.getStdIn().reader();
     const stderr = std.io.getStdErr().writer();
     const color_config = std.io.tty.detectConfig(std.io.getStdErr());
-    _ = color_config;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -58,12 +56,13 @@ pub fn main() !void {
     }
 
     // prepare Reporter
-    //    var reporter = report.Reporter{
-    //        .out = stderr,
-    //        .files = files.items,
-    //        .source = source,
-    //        .options = .{ .color_config = color_config },
-    //    };
+    var reporter = report.Reporter{
+        .out = stderr,
+        .files = files.items,
+        .source = source,
+        .src = source[0..0],
+        .options = .{ .color_config = color_config },
+    };
 
     // dispatch command
     if (std.mem.eql(u8, command, "run")) {
@@ -71,9 +70,9 @@ pub fn main() !void {
         // Get listing from parser
         var parser = parse.Parser.init(source);
 
-        const listing = try sema.assemble(&parser, alloc);
+        const listing = sema.assemble(&parser, alloc, &reporter.src) catch |err|
+            return reporter.reportError(err);
         defer alloc.free(listing);
-        //      reporter.listing = listing;
 
         var machine = run.Machine.load(listing);
         try run.runMachine(&machine, stdin, stdout);
@@ -84,7 +83,7 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, command, "lex")) {
         var tokens = parse.TokenIterator{ .index = 0, .src = source };
 
-        while (try tokens.next()) |token| {
+        while (try tokens.next(&reporter.src)) |token| {
             std.debug.print("{s} <{s}>\n", .{ @tagName(token.kind), token.src });
         }
     } else {
