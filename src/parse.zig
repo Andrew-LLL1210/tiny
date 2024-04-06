@@ -3,6 +3,7 @@ const std = @import("std");
 pub const Parser = struct {
     source: []const u8,
     tokens: TokenIterator,
+    state: enum { newline, label, instruction } = .newline,
 
     pub fn init(source: []const u8) Parser {
         return .{
@@ -16,8 +17,10 @@ pub const Parser = struct {
 
         const identifier_token = while (try tokens.next()) |token| {
             if (token.kind != .newline) break token;
+            self.state = .newline;
         } else return null;
 
+        if (self.state == .instruction) return error.ExpectedNewline;
         if (identifier_token.kind != .identifier) return error.IllegalToken;
         const identifier = identifier_token.src;
 
@@ -51,11 +54,12 @@ pub const Parser = struct {
             },
         };
 
-        // TODO fix trailingtoken logic
-        //        if (action != .label and !tokens.hasNewlineOrEnd()) {
-        //_ = try tokens.next(); // for reporting correct token
-        //return error.TrailingToken;
-        //}
+        if (action == .label and self.state == .label) return error.ExpectedNewline;
+        self.state = switch (t2.kind) {
+            .colon => .label,
+            .newline => .newline,
+            .identifier, .number, .string => .instruction,
+        };
 
         return .{
             .src = joinSlices(identifier, t2.src),
@@ -280,7 +284,6 @@ pub const TokenIterator = struct {
                     '"', '\'' => if (c == src[start]) break i,
                     else => {},
                 }) else src.len;
-                // TODO maybe enforce boundary condition? caller should be ok anyway
 
                 return Token.init(src[start..end], .string);
             },
