@@ -1,5 +1,6 @@
 const std = @import("std");
 const parse = @import("parse.zig");
+const sema = @import("sema.zig");
 
 pub const FileData = struct {
     name: []const u8,
@@ -15,7 +16,7 @@ pub const Reporter = struct {
     files: []const FileData,
     source: []const u8,
     options: Options,
-    listing: ?parse.Listing = null,
+    listing: ?sema.Listing = null,
 
     location: [3]usize = .{ 0, 0, 0 },
 

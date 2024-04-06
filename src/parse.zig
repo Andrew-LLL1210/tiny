@@ -51,7 +51,7 @@ pub const Parser = struct {
             },
         };
 
-        if (!tokens.hasNewlineOrEnd()) {
+        if (action != .label and !tokens.hasNewlineOrEnd()) {
             _ = try tokens.next(); // for reporting correct token
             return error.TrailingToken;
         }
@@ -62,9 +62,6 @@ pub const Parser = struct {
         };
     }
 };
-
-pub const Listing = []const ListingEntry;
-pub const ListingEntry = struct { ip: usize, word: Word, line_no: usize };
 
 pub const Statement = struct {
     src: []const u8,
@@ -81,7 +78,12 @@ pub const Statement = struct {
 pub const Operation = struct {
     opcode: Opcode,
     argument: Argument,
+    /// assumes Argument != .label
+    pub fn reify(operation: Operation, label_table: HashMap(u32)) ?Word {
+        return operation.opcode.encode(operation.argument, label_table);
+    }
 };
+const HashMap = @import("insensitive.zig").HashMap;
 
 const ArgumentKind = enum { none, number, label };
 
@@ -190,15 +192,16 @@ pub const Opcode = enum(u32) {
     fn encode(
         opcode: Opcode,
         argument: Argument,
-    ) Word {
+        label_table: HashMap(u32),
+    ) ?Word {
         // precondition: opcode.takesArgument(argument)
         switch (argument) {
             .none => return @intCast(@intFromEnum(opcode) * 1000),
-            .label => return @intCast(1000 * switch (opcode) {
+            .label => |name| return @intCast((label_table.get(name) orelse return null) + 1000 * switch (opcode) {
                 .push, .pop => @intFromEnum(opcode) + 6,
                 else => @intFromEnum(opcode),
             }),
-            .immediate => |arg| return @intCast(arg + 1000 * switch (opcode) {
+            .number => |arg| return @intCast(arg + 1000 * switch (opcode) {
                 .ld, .add, .sub, .mul, .div => @intFromEnum(opcode) + 90,
                 else => @intFromEnum(opcode),
             }),

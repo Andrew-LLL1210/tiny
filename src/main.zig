@@ -1,14 +1,18 @@
 const std = @import("std");
 const report = @import("report.zig");
 const parse = @import("parse.zig");
+const sema = @import("sema.zig");
 const run = @import("run.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
-    const out_color_config = std.io.tty.detectConfig(std.io.getStdOut());
+    //    const out_color_config = std.io.tty.detectConfig(std.io.getStdOut());
     const stdin = std.io.getStdIn().reader();
     const stderr = std.io.getStdErr().writer();
     const color_config = std.io.tty.detectConfig(std.io.getStdErr());
+    _ = stdout;
+    _ = stdin;
+    _ = color_config;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -56,24 +60,30 @@ pub fn main() !void {
     }
 
     // prepare Reporter
-    var reporter = report.Reporter{
-        .out = stderr,
-        .files = files.items,
-        .source = source,
-        .options = .{ .color_config = color_config },
-    };
+    //    var reporter = report.Reporter{
+    //        .out = stderr,
+    //        .files = files.items,
+    //        .source = source,
+    //        .options = .{ .color_config = color_config },
+    //    };
 
     // dispatch command
     if (std.mem.eql(u8, command, "run")) {
 
         // Get listing from parser
-        const listing = try parse.parse(source, &reporter, alloc);
-        defer alloc.free(listing);
+        var parser = parse.Parser.init(source);
 
-        reporter.listing = listing;
-        try run.runMachine(listing, stdin, stdout, &reporter);
-    } else if (std.mem.eql(u8, command, "flow")) {
-        try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
+        while (try parser.nextInstruction()) |instruction| {
+            try stderr.print("{any}\n", .{instruction.action});
+        }
+
+        //const listing = try sema.assemble(&parser, alloc);
+        //defer alloc.free(listing);
+
+        //      reporter.listing = listing;
+        //        try run.runMachine(listing, stdin, stdout, &reporter);
+        //    } else if (std.mem.eql(u8, command, "flow")) {
+        //        try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
     } else {
         try stderr.print("{s} is not a command", .{command});
         return error.IncorrectUsage;
