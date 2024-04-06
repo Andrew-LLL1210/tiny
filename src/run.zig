@@ -3,131 +3,134 @@ const std = @import("std");
 /// A Word is in the range [-10000, 10000];
 pub const Word = i32;
 
+pub const Machine = struct {
+    memory: [900]?Word = .{null} ** 900,
+    ip: u32 = 0,
+    acc: ?Word = null,
+    sp: u32 = 900,
+    bp: u32 = 900,
+
+    pub fn load(listing: Listing) Machine {
+        var machine = Machine{};
+        for (listing, 0..) |entry, i| machine.memory[i] = entry.word;
+        return machine;
+    }
+};
+
 pub fn runMachine(
-    listing: Listing,
-    stdin: File.Reader,
-    stdout: File.Writer,
-    reporter: *const Reporter,
-) ReportedError!void {
-    var memory: [900]?Word = .{null} ** 900;
-    var ip: u32 = 0;
-    var acc: ?Word = null;
-    var sp: u32 = 900;
-    var bp: u32 = 900;
-
-    for (listing) |entry| memory[entry.ip] = entry.word;
-
+    machine: *Machine,
+    stdin: anytype,
+    stdout: anytype,
+) !void {
+    const m = machine;
     while (true) {
-        const m_ = memory[ip];
+        const m_ = m.memory[m.ip];
         if (m_ == null or m_.? < 0 or m_.? > 99999)
-            return reporter.reportIp(ip, non_exe_instruction_msg, .{ip});
+            return error.InvalidInstruction;
 
-        const cur_ip = ip;
+        var acc = m.acc;
+        defer m.acc = acc;
+
+        const memory = &m.memory;
+        const cur_ip = m.ip;
+        var next_ip = cur_ip + 1;
+        defer m.ip = next_ip;
+
         const instruction: u32 = @intCast(m_.?);
-        ip += 1;
-
         const op = opFromCode(instruction / 1000) orelse
-            return reporter.reportIp(cur_ip, "Invalid opcode {d}", .{instruction / 1000});
+            return error.InvalidInstruction;
         const arg: u32 = instruction % 1000;
 
         // if acc need be nonnull for semantic reasons, let's assert that now
         switch (op) {
             .ld, .ldi, .stop, .lda, .ld_imm, .in, .ret, .jmp, .pop, .push_addr, .pop_addr, .pusha, .ldparam => {},
             .call => {
-                if (arg == 925 or arg == 950 or arg == inputString) if (acc == null)
-                    return reporter.reportIp(cur_ip, "Acc is null", .{});
+                if (arg == printInteger or arg == printString or arg == inputString) if (acc == null)
+                    return error.AccIsNull;
             },
             // zig fmt: off
             .st, .sti, .add, .sub, .mul, .div, .add_imm, .sub_imm, .out,
             .mul_imm, .div_imm, .jg, .jl, .je, .jge, .jle, .jne, .push => {
-                if (acc == null) return reporter.reportIp(cur_ip, "ACC is null", .{});
+                if (acc == null) return error.AccIsNull;
             },
             // zig fmt: on
         }
 
-        const idk = "TODO: provide label name from reporter";
         // for any operations where arg refers to a label,
         // we can assume that arg is within bounds, since it was parsed successfully.
         switch (op) {
             .stop => return,
-            .ld => acc = memory[arg] orelse return reporter.reportIp(cur_ip, "Load of null value '{s}'", .{idk}),
+            .ld => acc = memory[arg] orelse return error.OperatorNull,
             .st => memory[arg] = acc,
             .lda, .ld_imm => acc = @intCast(arg),
 
             // we won't worry about overflow until after the switch
-            .add => acc.? += memory[arg] orelse return reporter.reportIp(cur_ip, null_argument_msg, .{idk}),
-            .sub => acc.? -= memory[arg] orelse return reporter.reportIp(cur_ip, null_argument_msg, .{idk}),
-            .mul => acc.? *= memory[arg] orelse return reporter.reportIp(cur_ip, null_argument_msg, .{idk}),
+            .add => acc.? += memory[arg] orelse return error.OperatorNull,
+            .sub => acc.? -= memory[arg] orelse return error.OperatorNull,
+            .mul => acc.? *= memory[arg] orelse return error.OperatorNull,
             .add_imm => acc.? += @intCast(arg),
             .sub_imm => acc.? -= @intCast(arg),
             .mul_imm => acc.? *= @intCast(arg),
 
             .div => if (memory[arg]) |word| {
-                if (word == 0) return reporter.reportIp(cur_ip, "Division by zero", .{});
+                if (word == 0) return error.DivZero;
                 acc = @divTrunc(acc.?, word);
-            } else return reporter.reportIp(cur_ip, overflow_msg, .{}),
-            .div_imm => if (memory[arg]) |word| {
-                acc = @divTrunc(acc.?, word);
-            } else return reporter.reportIp(cur_ip, "Division by zero", .{}),
+            } else return error.OperatorNull,
+            .div_imm => {
+                if (arg == 0) return error.DivZero;
+                acc = @divTrunc(acc.?, @as(i32, @intCast(arg)));
+            },
 
             .ldi => if (memory[arg]) |word| if (word >= 0 and word < memory.len) {
-                acc = memory[@intCast(word)] orelse return reporter.reportIp(cur_ip, "Load of null value '{s}'", .{idk});
-            } else return reporter.reportIp(cur_ip, "Attempt to read non-existant address {?d}", .{memory[arg]}),
+                acc = memory[@intCast(word)] orelse return error.LdiNull;
+            } else return error.IndirectIllegal,
             .sti => if (memory[arg]) |word| if (word >= 0 and word < memory.len) {
                 memory[@intCast(word)] = acc;
-            } else return reporter.reportIp(cur_ip, "Attempt to write non-existant address {?d}", .{memory[arg]}),
+            } else return error.IndirectIllegal,
 
-            .in => acc = stdin.readByte() catch |err|
-                return reporter.reportIp(cur_ip, "Failed to get input byte: {s}", .{@errorName(err)}),
+            .in => acc = stdin.readByte() catch return error.ReadError,
             .out => if (acc) |byte| if (byte >= 0 and byte < 128) {
-                stdout.writeByte(@intCast(acc.?)) catch |err|
-                    return reporter.reportIp(cur_ip, "Failed to output byte: {s}", .{@errorName(err)});
-            } else return reporter.reportIp(cur_ip, "Cannot output: ACC is not ASCII", .{}),
+                stdout.writeByte(@intCast(acc.?)) catch return error.WriteError;
+            } else return error.NotAscii,
 
             // zig fmt: off
-            .jmp => ip = arg,
-            .jg => if (acc) |word| if (word > 0) { ip = arg; },
-            .jl => if (acc) |word| if (word < 0) { ip = arg; },
-            .je => if (acc) |word| if (word == 0) { ip = arg; },
-            .jge => if (acc) |word| if (word >= 0) { ip = arg; },
-            .jle => if (acc) |word| if (word <= 0) { ip = arg; },
-            .jne => if (acc) |word| if (word != 0) { ip = arg; },
+            .jmp => next_ip = arg,
+            .jg => if (acc) |word| if (word > 0) { next_ip = arg; },
+            .jl => if (acc) |word| if (word < 0) { next_ip = arg; },
+            .je => if (acc) |word| if (word == 0) { next_ip = arg; },
+            .jge => if (acc) |word| if (word >= 0) { next_ip = arg; },
+            .jle => if (acc) |word| if (word <= 0) { next_ip = arg; },
+            .jne => if (acc) |word| if (word != 0) { next_ip = arg; },
             // zig fmt: on
 
             .call => switch (arg) {
-                printInteger => stdout.print("{d}", .{acc.?}) catch |err|
-                    return reporter.reportIp(cur_ip, "Failed to output: {s}", .{@errorName(err)}),
+                printInteger => stdout.print("{d}", .{acc.?}) catch return error.WriteError,
 
                 printString => {
-                    if (acc.? < 0 or acc.? >= 900) return reporter.reportIp(cur_ip, "Bad address to string", .{});
+                    if (acc.? < 0 or acc.? >= 900) return error.BadAddress;
                     var ix: u16 = @intCast(acc.?);
                     defer acc = ix;
 
                     while (memory[ix]) |word| : (ix += 1) {
                         if (word == 0) break;
-                        if (word < 0 or word > 128) return reporter.reportIp(cur_ip, "Bad ASCII value", .{});
-                        stdout.writeByte(@intCast(word)) catch |err|
-                            return reporter.reportIp(cur_ip, "Failed to output: {s}", .{@errorName(err)});
+                        if (word < 0 or word > 128) return error.NotAscii;
+                        stdout.writeByte(@intCast(word)) catch return error.WriteError;
                     }
                 },
 
                 inputInteger => {
                     var buf: [100]u8 = undefined;
-                    const rline = stdin.readUntilDelimiter(&buf, '\n') catch |err|
-                        return reporter.reportIp(cur_ip, "Failed to read input: {s}", .{@errorName(err)});
+                    const rline = stdin.readUntilDelimiter(&buf, '\n') catch return error.ReadError;
                     const line = std.mem.trim(u8, rline, &std.ascii.whitespace);
-                    acc = std.fmt.parseInt(Word, line, 10) catch |err|
-                        return reporter.reportIp(cur_ip, "Failed to get integer: {s}", .{@errorName(err)});
+                    acc = std.fmt.parseInt(Word, line, 10) catch return error.ParseIntError;
                 },
 
                 inputString => {
                     var buf: [100]u8 = undefined;
-                    const rline = stdin.readUntilDelimiter(&buf, '\n') catch |err|
-                        return reporter.reportIp(cur_ip, "Failed to read input: {s}", .{@errorName(err)});
-                    if (acc.? < 0) return reporter.reportIp(cur_ip, "ACC negative", .{});
+                    const rline = stdin.readUntilDelimiter(&buf, '\n') catch return error.ReadError;
+                    if (acc.? < 0) return error.BadAddress;
                     const addr: usize = @intCast(acc.?);
-                    if (addr + rline.len + 1 > memory.len)
-                        return reporter.reportIp(cur_ip, "Input string is too long", .{});
+                    if (addr + rline.len + 1 > memory.len) return error.BadAddress;
                     for (rline, addr..) |byte, index| {
                         memory[index] = byte;
                     }
@@ -135,22 +138,22 @@ pub fn runMachine(
                 },
 
                 else => {
-                    if (arg >= 900) return reporter.reportIp(cur_ip, "Call to out of memory", .{});
+                    if (arg >= 900) return error.BadAddress;
 
-                    sp -= 2;
-                    memory[sp + 1] = @intCast(ip);
-                    memory[sp] = @intCast(bp);
-                    bp = sp;
-                    ip = arg;
+                    m.sp -= 2;
+                    memory[m.sp + 1] = @intCast(next_ip);
+                    memory[m.sp] = @intCast(m.bp);
+                    m.bp = m.sp;
+                    next_ip = arg;
                 },
             },
 
             .ret => {
                 // TODO detect stack underflow
-                sp = bp;
-                bp = @intCast(memory[sp].?);
-                ip = @intCast(memory[sp + 1].?);
-                sp += 2;
+                m.sp = m.bp;
+                m.bp = @intCast(memory[m.sp].?);
+                next_ip = @intCast(memory[m.sp + 1].?);
+                m.sp += 2;
             },
 
             .push, .push_addr, .pusha => {
@@ -160,32 +163,31 @@ pub fn runMachine(
                     .pusha => @intCast(arg),
                     else => unreachable,
                 };
-                sp -= 1;
-                memory[sp] = value;
+                m.sp -= 1;
+                memory[m.sp] = value;
             },
 
             .pop => {
-                acc = memory[sp];
-                sp += 1;
+                acc = memory[m.sp];
+                m.sp += 1;
             },
 
             .pop_addr => {
-                memory[arg] = memory[sp];
-                sp += 1;
+                memory[arg] = memory[m.sp];
+                m.sp += 1;
             },
 
             .ldparam => {
-                acc = memory[bp + arg + 1];
+                acc = memory[m.bp + arg + 1];
             },
         }
 
-        if (acc) |value| if (value < -99999 or value > 99999)
-            return reporter.reportIp(cur_ip, "Integer overflow of {d}", .{value});
+        if (acc) |value| if (value < -99999 or value > 99999) return error.IntegerOverflow;
     }
 }
 
 const File = std.fs.File;
-const Listing = @import("parse.zig").Listing;
+const Listing = @import("sema.zig").Listing;
 const Reporter = @import("report.zig").Reporter;
 const ReportedError = Reporter.ReportedError;
 
@@ -239,3 +241,18 @@ const Op = enum(u32) {
     mul_imm = 98,
     div_imm = 99,
 };
+
+fn readStub(_: void, _: []u8) error{}!usize {
+    unreachable;
+}
+
+test runMachine {
+    const out = std.io.getStdErr().writer();
+    const in = std.io.GenericReader(void, error{}, readStub){ .context = {} };
+    // machine that STOPS
+    var machine = Machine.load(&.{
+        .{ .word = 0 },
+    });
+
+    try runMachine(&machine, in, out);
+}

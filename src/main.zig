@@ -10,8 +10,6 @@ pub fn main() !void {
     const stdin = std.io.getStdIn().reader();
     const stderr = std.io.getStdErr().writer();
     const color_config = std.io.tty.detectConfig(std.io.getStdErr());
-    _ = stdout;
-    _ = stdin;
     _ = color_config;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -73,19 +71,55 @@ pub fn main() !void {
         // Get listing from parser
         var parser = parse.Parser.init(source);
 
-        while (try parser.nextInstruction()) |instruction| {
-            try stderr.print("{any}\n", .{instruction.action});
-        }
-
-        //const listing = try sema.assemble(&parser, alloc);
-        //defer alloc.free(listing);
-
+        const listing = try sema.assemble(&parser, alloc);
+        defer alloc.free(listing);
         //      reporter.listing = listing;
+
+        var machine = run.Machine.load(listing);
+        try run.runMachine(&machine, stdin, stdout);
+
         //        try run.runMachine(listing, stdin, stdout, &reporter);
         //    } else if (std.mem.eql(u8, command, "flow")) {
         //        try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
+    } else if (std.mem.eql(u8, command, "lex")) {
+        var tokens = parse.TokenIterator{ .index = 0, .src = source };
+
+        while (try tokens.next()) |token| {
+            std.debug.print("{s} <{s}>\n", .{ @tagName(token.kind), token.src });
+        }
     } else {
         try stderr.print("{s} is not a command", .{command});
         return error.IncorrectUsage;
     }
+}
+
+fn readShim(_: void, _: []u8) error{}!usize {
+    unreachable;
+}
+
+test "hello world" {
+    const alloc = std.testing.allocator;
+    const source =
+        \\jmp main
+        \\string: dc 'hello world!\n'
+        \\
+        \\main:
+        \\    lda string
+        \\    call printString
+        \\    stop
+    ;
+
+    var out = std.ArrayList(u8).init(std.testing.allocator);
+    const shim = std.io.GenericReader(void, error{}, readShim){ .context = {} };
+
+    var parser = parse.Parser.init(source);
+    const listing = sema.assemble(&parser, alloc) catch {
+        std.debug.print("{any}", .{parser.nextInstruction()});
+        return error.SkipZigTest;
+    };
+    defer alloc.free(listing);
+    var machine = run.Machine.load(listing);
+    try run.runMachine(&machine, shim, out.writer());
+
+    try std.testing.expectEqualStrings("hello world!\n", out.items);
 }

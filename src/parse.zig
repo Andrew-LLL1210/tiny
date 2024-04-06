@@ -51,10 +51,11 @@ pub const Parser = struct {
             },
         };
 
-        if (action != .label and !tokens.hasNewlineOrEnd()) {
-            _ = try tokens.next(); // for reporting correct token
-            return error.TrailingToken;
-        }
+        // TODO fix trailingtoken logic
+        //        if (action != .label and !tokens.hasNewlineOrEnd()) {
+        //_ = try tokens.next(); // for reporting correct token
+        //return error.TrailingToken;
+        //}
 
         return .{
             .src = joinSlices(identifier, t2.src),
@@ -102,11 +103,11 @@ const Argument = union(ArgumentKind) {
     }
 };
 
-const Token = struct {
+pub const Token = struct {
     src: []const u8,
     kind: Kind,
 
-    const Kind = enum {
+    pub const Kind = enum {
         identifier,
         number,
         string,
@@ -209,11 +210,11 @@ pub const Opcode = enum(u32) {
     }
 };
 
-const TokenIterator = struct {
+pub const TokenIterator = struct {
     index: usize = 0,
     src: []const u8,
 
-    fn hasNewlineOrEnd(self: *TokenIterator) bool {
+    pub fn hasNewlineOrEnd(self: *TokenIterator) bool {
         self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return true;
         return switch (self.src[self.index]) {
             ';', '\r', '\n', '/' => true,
@@ -221,7 +222,7 @@ const TokenIterator = struct {
         };
     }
 
-    fn next(self: *TokenIterator) !?Token {
+    pub fn next(self: *TokenIterator) !?Token {
         self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return null;
 
         const src = self.src;
@@ -271,7 +272,7 @@ const TokenIterator = struct {
             },
             '"', '\'' => {
                 var escape = true;
-                end = for (src[start..], start..) |c, i| (if (escape == false) switch (c) {
+                end = 1 + for (src[start..], start..) |c, i| (if (escape) switch (c) {
                     '0', 'r', 'n', 't', '"', '\'' => escape = false,
                     else => return error.IllegalEscapeCode,
                 } else switch (c) {
