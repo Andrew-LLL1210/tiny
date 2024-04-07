@@ -73,7 +73,7 @@ pub const Parser = struct {
 pub const Statement = struct {
     src: []const u8,
     action: Action,
-    const Action = union(enum) {
+    pub const Action = union(enum) {
         label: []const u8,
         dc_directive: []const u8,
         db_directive: Word,

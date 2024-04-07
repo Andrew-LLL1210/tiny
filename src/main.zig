@@ -87,6 +87,10 @@ pub fn main() !void {
         while (try tokens.next(&reporter.src)) |token| {
             std.debug.print("{s} <{s}>\n", .{ @tagName(token.kind), token.src });
         }
+    } else if (std.mem.eql(u8, command, "fmt")) {
+        var parser = parse.Parser.init(source);
+        sema.printFmt(&parser, stdout, &reporter.src) catch |err|
+            return reporter.reportError(err);
     } else {
         try stderr.print("'{s}' is not a command", .{command});
     }
