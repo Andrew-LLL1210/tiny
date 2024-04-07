@@ -1,8 +1,8 @@
-# Tiny <!-- omit in toc -->
+# Tiny
 
-An Assembler and Testing Toolkit for the Tiny Language
+An interpreter and semantic analysis tool for the Tiny assembler language
 
-Author: Andrew Phillips (at Harding University, AR)
+By Andrew Phillips
 
 - [Installation](#installation)
   - [Option 1: Prebuilt Binary](#option-1-prebuilt-binary)
