@@ -6,6 +6,7 @@ const run = @import("run.zig");
 
 pub fn main() !void {
     const stdout = std.io.getStdOut().writer();
+    const out_color_config = std.io.tty.detectConfig(std.io.getStdOut());
     const stdin = std.io.getStdIn().reader();
     const stderr = std.io.getStdErr().writer();
     const color_config = std.io.tty.detectConfig(std.io.getStdErr());
@@ -76,9 +77,10 @@ pub fn main() !void {
             reporter.setSrcByIp(machine.ip, listing);
             return reporter.reportError(err);
         };
-
-        //    } else if (std.mem.eql(u8, command, "flow")) {
-        //        try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
+    } else if (std.mem.eql(u8, command, "flow")) {
+        var parser = parse.Parser.init(source);
+        sema.printSkeleton(&parser, stdout, out_color_config, alloc, &reporter.src) catch |err|
+            return reporter.reportError(err);
     } else if (std.mem.eql(u8, command, "lex")) {
         var tokens = parse.TokenIterator{ .index = 0, .src = source };
 
@@ -86,8 +88,7 @@ pub fn main() !void {
             std.debug.print("{s} <{s}>\n", .{ @tagName(token.kind), token.src });
         }
     } else {
-        try stderr.print("{s} is not a command", .{command});
-        return error.IncorrectUsage;
+        try stderr.print("'{s}' is not a command", .{command});
     }
 }
 

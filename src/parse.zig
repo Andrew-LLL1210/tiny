@@ -156,6 +156,13 @@ pub const Opcode = enum(u32) {
     ds,
     dc,
 
+    pub fn isControlFlow(opcode: Opcode) bool {
+        return switch (opcode) {
+            .stop, .jmp, .jg, .jl, .je, .ret, .jge, .jle, .jne => true,
+            else => false,
+        };
+    }
+
     fn hasArgument(opcode: Opcode) Ternary {
         return switch (opcode) {
             .stop, .in, .out, .ret => .no,

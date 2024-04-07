@@ -43,6 +43,75 @@ pub fn assemble(parser: *Parser, alloc: Allocator, src: *[]const u8) !Listing {
 
 const DeferredLabelData = struct { op: parse.Operation, ix: usize, src: []const u8 };
 
+pub fn printSkeleton(
+    parser: *Parser,
+    out: anytype,
+    out_color: std.io.tty.Config,
+    alloc: Allocator,
+    r: *[]const u8,
+) !void {
+    var label_table = HashMap(SemaLabelData).init(alloc);
+    defer label_table.deinit();
+
+    var statements_to_print = ArrayList(Statement).init(alloc);
+    defer statements_to_print.deinit();
+
+    while (try parser.nextInstruction(r)) |statement| switch (statement.action) {
+        .label => {
+            try statements_to_print.append(statement);
+            const entry = try label_table.getOrPutValue(statement.action.label, .{});
+            if (entry.value_ptr.is_declared) return error.DuplicateLabel;
+            entry.value_ptr.is_declared = true;
+        },
+        .operation => |op| if (op.opcode.isControlFlow()) {
+            try statements_to_print.append(statement);
+            if (op.argument == .label) {
+                const entry = try label_table.getOrPutValue(op.argument.label, .{});
+                if (entry.value_ptr.is_declared) {
+                    entry.value_ptr.is_referenced_after = true;
+                } else entry.value_ptr.is_referenced_before = true;
+            }
+        },
+        else => {},
+    };
+
+    for (statements_to_print.items) |statement| switch (statement.action) {
+        .label => |name| {
+            defer out_color.setColor(out, .reset) catch {};
+            try out_color.setColor(out, colorLabel(label_table.get(name).?));
+            try out.print("{s}:\n", .{name});
+        },
+        .operation => |operation| switch (operation.argument) {
+            .none => {
+                try out.print("    {s}\n", .{@tagName(operation.opcode)});
+            },
+            .label => |name| {
+                defer out_color.setColor(out, .reset) catch {};
+                try out_color.setColor(out, colorLabel(label_table.get(name).?));
+                try out.print("    {s} {s}\n", .{ @tagName(operation.opcode), name });
+            },
+            .number => |number| {
+                try out.print("    {s} {d}\n", .{ @tagName(operation.opcode), number });
+            },
+        },
+        else => unreachable,
+    };
+}
+
+const SemaLabelData = struct {
+    is_referenced_before: bool = false,
+    is_referenced_after: bool = false,
+    is_declared: bool = false,
+};
+
+fn colorLabel(data: SemaLabelData) std.io.tty.Color {
+    if (!data.is_declared) return .red;
+    if (data.is_referenced_before and data.is_referenced_after) return .yellow;
+    if (data.is_referenced_before) return .white;
+    if (data.is_referenced_after) return .cyan;
+    return std.io.tty.Color.dim;
+}
+
 const std = @import("std");
 const parse = @import("parse.zig");
 const run = @import("run.zig");
