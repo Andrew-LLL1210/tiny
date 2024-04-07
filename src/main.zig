@@ -1,6 +1,7 @@
 const std = @import("std");
 const report = @import("report.zig");
 const parse = @import("parse.zig");
+const sema = @import("sema.zig");
 const run = @import("run.zig");
 
 pub fn main() !void {
@@ -38,7 +39,7 @@ pub fn main() !void {
         defer file.close();
 
         const len = source_list.items.len;
-        try fin.readAllArrayList(&source_list, 2_000);
+        try fin.readAllArrayList(&source_list, 20_000);
         try source_list.append('\n');
         const contents = source_list.items[len..];
         try files.append(report.FileData.init(
@@ -60,22 +61,68 @@ pub fn main() !void {
         .out = stderr,
         .files = files.items,
         .source = source,
+        .src = source[0..0],
         .options = .{ .color_config = color_config },
     };
 
     // dispatch command
     if (std.mem.eql(u8, command, "run")) {
-
-        // Get listing from parser
-        const listing = try parse.parse(source, &reporter, alloc);
+        var parser = parse.Parser.init(source);
+        const listing = sema.assemble(&parser, alloc, &reporter.src) catch |err|
+            return reporter.reportError(err);
         defer alloc.free(listing);
 
-        reporter.listing = listing;
-        try run.runMachine(listing, stdin, stdout, &reporter);
+        var machine = run.Machine.load(listing);
+        run.runMachine(&machine, stdin, stdout) catch |err| {
+            reporter.setSrcByIp(machine.ip, listing);
+            return reporter.reportError(err);
+        };
     } else if (std.mem.eql(u8, command, "flow")) {
-        try parse.printSkeleton(stdout, out_color_config, source, &reporter, alloc);
+        var parser = parse.Parser.init(source);
+        sema.printSkeleton(&parser, stdout, out_color_config, alloc, &reporter.src) catch |err|
+            return reporter.reportError(err);
+    } else if (std.mem.eql(u8, command, "lex")) {
+        var tokens = parse.TokenIterator{ .index = 0, .src = source };
+
+        while (try tokens.next(&reporter.src)) |token| {
+            std.debug.print("{s} <{s}>\n", .{ @tagName(token.kind), token.src });
+        }
+    } else if (std.mem.eql(u8, command, "fmt")) {
+        var parser = parse.Parser.init(source);
+        sema.printFmt(&parser, stdout, &reporter.src) catch |err|
+            return reporter.reportError(err);
     } else {
-        try stderr.print("{s} is not a command", .{command});
-        return error.IncorrectUsage;
+        try stderr.print("'{s}' is not a command", .{command});
     }
+}
+
+fn readShim(_: void, _: []u8) error{}!usize {
+    unreachable;
+}
+
+test "hello world" {
+    const alloc = std.testing.allocator;
+    const source =
+        \\jmp main
+        \\string: dc 'hello world!\n'
+        \\
+        \\main:
+        \\    lda string
+        \\    call printString
+        \\    stop
+    ;
+
+    var out = std.ArrayList(u8).init(std.testing.allocator);
+    const shim = std.io.GenericReader(void, error{}, readShim){ .context = {} };
+
+    var parser = parse.Parser.init(source);
+    const listing = sema.assemble(&parser, alloc) catch {
+        std.debug.print("{any}", .{parser.nextInstruction()});
+        return error.SkipZigTest;
+    };
+    defer alloc.free(listing);
+    var machine = run.Machine.load(listing);
+    try run.runMachine(&machine, shim, out.writer());
+
+    try std.testing.expectEqualStrings("hello world!\n", out.items);
 }

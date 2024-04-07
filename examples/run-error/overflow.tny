@@ -1,0 +1,5 @@
+ld 999
+mul 100
+add 99
+add 1
+stop
