@@ -22,7 +22,7 @@ architecture or OS, file an issue and I can compile a binary for you.
 
 ### Option 2: Build from Source
 
-Requires [Zig master](https://github.com/ziglang/zig)
+Requires [Zig 0.12.0](https://github.com/ziglang/zig)
 
 1. Clone this repository (`https://github.com/Andrew-LLL1210/tiny`)
 2. Build with `zig build`
