@@ -78,7 +78,7 @@ const Command = struct {
                 i += 1;
                 if (i == args.len) fatal("{s} requires a FILE argument\n", .{args[i]});
                 max_steps = std.fmt.parseInt(usize, args[i], 10) catch |err|
-                    fatal("{s}: --max-steps expects a usize integer\n", .{err});
+                    fatal("{s}: --max-steps expects a usize integer\n", .{@errorName(err)});
                 continue;
             }
 
@@ -92,14 +92,19 @@ const Command = struct {
         if (file == null) fatal("no file specified\n", .{});
         return .{
             .file = file.?,
+            .file_in = file_in,
+            .file_out = file_out,
+            .file_err = file_err,
+            .file_prepend = file_prepend,
+            .max_steps = max_steps,
         };
     }
 
-    fn optionMatches(arg: []const u8, long: []const u8, short: u8) bool {
+    fn optionMatches(arg: []const u8, long: []const u8, short: ?u8) bool {
         return if (std.mem.startsWith(u8, arg, "--"))
             std.mem.eql(u8, arg[2..], long)
         else
-            (arg.len == 2 and arg[0] == '-' and arg[1] == short);
+            (short != null and arg.len == 2 and arg[0] == '-' and arg[1] == short.?);
     }
 
     fn fatalHelp() noreturn {

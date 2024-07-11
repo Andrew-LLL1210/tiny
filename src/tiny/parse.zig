@@ -20,6 +20,13 @@ pub const Parser = struct {
             self.state = .newline;
         } else return null;
 
+        if (identifier_token.kind == .comment) return Statement{
+            .src = identifier_token.src,
+            .action = .{
+                .comment = if (self.state == .newline) .full_line else .end_of_line,
+            },
+        };
+
         if (self.state == .instruction) return error.ExpectedNewline;
         if (identifier_token.kind != .identifier) return error.IllegalToken;
         const identifier = identifier_token.src;
@@ -54,12 +61,15 @@ pub const Parser = struct {
             },
         };
 
-        src.* = joinSlices(identifier, t2.src);
+        src.* = switch (t2.kind) {
+            .newline, .comment => identifier,
+            else => joinSlices(identifier, t2.src),
+        };
 
         if (action == .label and self.state == .label) return error.ExpectedNewline;
         self.state = switch (t2.kind) {
             .colon => .label,
-            .newline => .newline,
+            .comment, .newline => .newline,
             .identifier, .number, .string => .instruction,
         };
 
@@ -79,7 +89,33 @@ pub const Statement = struct {
         db_directive: Word,
         ds_directive: u32,
         operation: Operation,
+        comment: enum { end_of_line, full_line },
     };
+    pub fn format(
+        value: Statement,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        switch (value.action) {
+            .label => |label| try writer.print("{s}:", .{label}),
+            .dc_directive => |string| try writer.print("dc {s}", .{string}),
+            .db_directive => |word| try writer.print("db {d}", .{word}),
+            .ds_directive => |size| try writer.print("ds {d}", .{size}),
+            .operation => |operation| {
+                try writer.print("{s}", .{@tagName(operation.opcode)});
+                switch (operation.argument) {
+                    .none => {},
+                    .number => |num| try writer.print(" {d}", .{num}),
+                    .label => |label| try writer.print(" {s}", .{label}),
+                }
+            },
+            .comment => try writer.writeAll(value.src),
+        }
+    }
 };
 
 pub const Operation = struct {
@@ -104,7 +140,7 @@ const Argument = union(ArgumentKind) {
             .identifier => .{ .label = token.src },
             .number => .{ .number = try parseAddress(token.src) },
             .newline => .{ .none = {} },
-            .string, .colon => unreachable,
+            .comment, .string, .colon => unreachable,
         };
     }
 };
@@ -119,6 +155,7 @@ pub const Token = struct {
         string,
         colon,
         newline,
+        comment,
     };
 
     fn init(src: []const u8, kind: Kind) Token {
@@ -230,7 +267,7 @@ pub const TokenIterator = struct {
     pub fn hasNewlineOrEnd(self: *TokenIterator) bool {
         self.index = mem.indexOfNonePos(u8, self.src, self.index, " \t\r/") orelse return true;
         return switch (self.src[self.index]) {
-            ';', '\r', '\n', '/' => true,
+            '\r', '\n', '/' => true,
             else => false,
         };
     }
@@ -245,7 +282,11 @@ pub const TokenIterator = struct {
         defer r.* = src[start..end];
 
         switch (src[start]) {
-            ';', '\r', '\n' => {
+            ';' => {
+                end = mem.indexOfScalarPos(u8, src, start, '\n') orelse src.len;
+                return Token.init(src[start..end], .comment);
+            },
+            '\r', '\n' => {
                 end = 1 + (mem.indexOfScalarPos(u8, src, start, '\n') orelse return null);
                 return Token.init(src[start..end], .newline);
             },
@@ -332,44 +373,46 @@ fn joinSlices(a: []const u8, b: []const u8) []const u8 {
 
 // const ArgumentData = struct { none: bool, label: bool, number: bool };
 
-const mnemonic_map: type = std.ComptimeStringMapWithEql(Opcode,
-//blk: {
-//    var map: []struct { []const u8, Opcode } = &.{};
-//    for (std.enums.values(Opcode)) |name| {
-//        map = map ++ .{ name, std.enums.nameCast(Opcode, name) };
-//    }
-//    break :blk map;
-//},
-.{
-    .{ "stop", .stop },
-    .{ "ld", .ld },
-    .{ "lda", .lda },
-    .{ "ldi", .ldi },
-    .{ "st", .st },
-    .{ "sti", .sti },
-    .{ "add", .add },
-    .{ "sub", .sub },
-    .{ "mul", .mul },
-    .{ "div", .div },
-    .{ "in", .in },
-    .{ "out", .out },
-    .{ "jmp", .jmp },
-    .{ "jg", .jg },
-    .{ "jl", .jl },
-    .{ "je", .je },
-    .{ "call", .call },
-    .{ "ret", .ret },
-    .{ "push", .push },
-    .{ "pop", .pop },
-    .{ "ldparam", .ldparam },
-    .{ "jge", .jge },
-    .{ "jle", .jle },
-    .{ "jne", .jne },
-    .{ "pusha", .pusha },
-    .{ "db", .db },
-    .{ "ds", .ds },
-    .{ "dc", .dc },
-}, std.ascii.eqlIgnoreCase);
+const MnemonicMap = std.StaticStringMapWithEql(Opcode, std.static_string_map.eqlAsciiIgnoreCase);
+const mnemonic_map = MnemonicMap.initComptime(
+    //blk: {
+    //    var map: []struct { []const u8, Opcode } = &.{};
+    //    for (std.enums.values(Opcode)) |name| {
+    //        map = map ++ .{ name, std.enums.nameCast(Opcode, name) };
+    //    }
+    //    break :blk map;
+    //},
+    &[_]struct { []const u8, Opcode }{
+        .{ "stop", .stop },
+        .{ "ld", .ld },
+        .{ "lda", .lda },
+        .{ "ldi", .ldi },
+        .{ "st", .st },
+        .{ "sti", .sti },
+        .{ "add", .add },
+        .{ "sub", .sub },
+        .{ "mul", .mul },
+        .{ "div", .div },
+        .{ "in", .in },
+        .{ "out", .out },
+        .{ "jmp", .jmp },
+        .{ "jg", .jg },
+        .{ "jl", .jl },
+        .{ "je", .je },
+        .{ "call", .call },
+        .{ "ret", .ret },
+        .{ "push", .push },
+        .{ "pop", .pop },
+        .{ "ldparam", .ldparam },
+        .{ "jge", .jge },
+        .{ "jle", .jle },
+        .{ "jne", .jne },
+        .{ "pusha", .pusha },
+        .{ "db", .db },
+        .{ "ds", .ds },
+        .{ "dc", .dc },
+    },
+);
 
 const Ternary = enum { yes, no, maybe };
 const mem = std.mem;

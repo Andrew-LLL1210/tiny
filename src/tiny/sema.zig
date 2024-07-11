@@ -113,25 +113,45 @@ fn colorLabel(data: SemaLabelData) std.io.tty.Color {
 }
 
 pub fn printFmt(parser: *Parser, out: anytype, r: *[]const u8) !void {
-    var prev_action: std.meta.Tag(parse.Statement.Action) = .operation;
-    while (try parser.nextInstruction(r)) |statement| : (prev_action = statement.action) {
-        if (prev_action == .label) switch (statement.action) {
-            .dc_directive, .db_directive, .ds_directive => try out.writeByte(' '),
-            .label, .operation => try out.writeByte('\n'),
-        };
-        switch (statement.action) {
-            .label => |name| try out.print("{s}:", .{name}),
-            .operation => |op| switch (op.argument) {
-                .none => try out.print("    {s}\n", .{@tagName(op.opcode)}),
-                .label => |name| try out.print("    {s} {s}\n", .{ @tagName(op.opcode), name }),
-                .number => |n| try out.print("    {s} {d}\n", .{ @tagName(op.opcode), n }),
-            },
-            .dc_directive => |string| try out.print("dc {s}\n", .{string}),
-            .db_directive => |byte| try out.print("db {d}\n", .{byte}),
-            .ds_directive => |size| try out.print("ds {d}\n", .{size}),
-        }
-    }
-    if (prev_action == .label) try out.writeByte('\n');
+    var instruction = try parser.nextInstruction(r) orelse return;
+    while (true) switch (instruction.action) {
+        .comment => |mode| {
+            std.debug.assert(mode == .full_line);
+
+            const next = try parser.nextInstruction(r) orelse {
+                try out.print("{}\n", .{instruction});
+                return;
+            };
+
+            if (next.action == .label) {
+                try out.print("{}\n", .{instruction});
+            } else {
+                try out.print("    {}\n", .{instruction});
+            }
+
+            instruction = next;
+        },
+        .label => {
+            const next = try parser.nextInstruction(r);
+            if (next != null and next.?.action == .comment and next.?.action.comment == .end_of_line) {
+                try out.print("{} {}\n", .{ instruction, next.? });
+                instruction = try parser.nextInstruction(r) orelse return;
+            } else {
+                try out.print("{}\n", .{instruction});
+                instruction = next orelse return;
+            }
+        },
+        else => {
+            const next = try parser.nextInstruction(r);
+            if (next != null and next.?.action == .comment and next.?.action.comment == .end_of_line) {
+                try out.print("{} {}\n", .{ instruction, next.? });
+                instruction = try parser.nextInstruction(r) orelse return;
+            } else {
+                try out.print("{}\n", .{instruction});
+                instruction = next orelse return;
+            }
+        },
+    };
 }
 
 const std = @import("std");
