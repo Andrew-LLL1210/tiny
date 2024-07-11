@@ -21,7 +21,10 @@ pub fn main() !void {
     };
 
     switch (command) {
-        .fmt => fmt_cli.run(args[2..], gpa),
+        .fmt => fmt_cli.run(args[2..], gpa) catch |err| {
+            std.debug.print("unexpected error: {s}\n", .{@errorName(err)});
+            return;
+        },
         .run => run_cli.run(args[2..], gpa),
         .help => fatalHelp(),
         else => fatal("TODO command {s}\n", .{@tagName(command)}),

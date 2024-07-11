@@ -109,6 +109,7 @@ const Command = struct {
 
     fn fatalHelp() noreturn {
         std.debug.print(
+            \\
             \\Usage: tiny run [OPTIONS] SOURCE_FILE
             \\
             \\Options:
@@ -123,6 +124,7 @@ const Command = struct {
             \\      file to write output to during evaluation.
             \\  -p, --prepend FILE
             \\      file to prepend to the main file for parsing.
+            \\
             \\
         , .{});
         std.process.exit(1);
