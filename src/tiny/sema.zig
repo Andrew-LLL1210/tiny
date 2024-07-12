@@ -132,22 +132,86 @@ pub fn printFmt(parser: *Parser, out: anytype, r: *[]const u8) !void {
             instruction = next;
         },
         .label => {
-            const next = try parser.nextInstruction(r);
-            if (next != null and next.?.action == .comment and next.?.action.comment == .end_of_line) {
-                try out.print("{} {}\n", .{ instruction, next.? });
-                instruction = try parser.nextInstruction(r) orelse return;
-            } else {
+            const next = try parser.nextInstruction(r) orelse {
                 try out.print("{}\n", .{instruction});
-                instruction = next orelse return;
+                return;
+            };
+
+            switch (next.action) {
+                .comment => |mode| switch (mode) {
+                    .end_of_line => {
+                        try out.print("{} {}\n", .{ instruction, next });
+                        instruction = try parser.nextInstruction(r) orelse return;
+                    },
+                    .full_line => {
+                        try out.print("{}\n", .{instruction});
+                        instruction = next;
+                    },
+                },
+                .dc_directive, .ds_directive, .db_directive => {
+                    const rollback2 = parser.*;
+
+                    const s3 = try parser.nextInstruction(r) orelse {
+                        try out.print("{} {}\n", .{ instruction, next });
+                        return;
+                    };
+
+                    const rollback1 = parser.*;
+
+                    const behavior: enum { line, line_comment, split } = switch (s3.action) {
+                        .comment => |mode| switch (mode) {
+                            .end_of_line => blk: {
+                                const s4 = try parser.nextInstruction(r) orelse
+                                    break :blk .line_comment;
+                                break :blk switch (s4.action) {
+                                    .label => .line_comment,
+                                    else => .split,
+                                };
+                            },
+                            .full_line => blk: {
+                                const s4 = try parser.nextInstruction(r) orelse
+                                    break :blk .line;
+                                break :blk switch (s4.action) {
+                                    .label => .line,
+                                    else => .split,
+                                };
+                            },
+                        },
+                        .label => .line,
+                        else => .split,
+                    };
+
+                    switch (behavior) {
+                        .split => {
+                            try out.print("{}\n", .{instruction});
+                            parser.* = rollback2;
+                            instruction = next;
+                        },
+                        .line => {
+                            try out.print("{} {}\n", .{ instruction, next });
+                            parser.* = rollback1;
+                            instruction = s3;
+                        },
+                        .line_comment => {
+                            try out.print("{} {} {}\n", .{ instruction, next, s3 });
+                            parser.* = rollback1;
+                            instruction = try parser.nextInstruction(r) orelse return;
+                        },
+                    }
+                },
+                else => {
+                    try out.print("{}\n", .{instruction});
+                    instruction = next;
+                },
             }
         },
         else => {
             const next = try parser.nextInstruction(r);
             if (next != null and next.?.action == .comment and next.?.action.comment == .end_of_line) {
-                try out.print("{} {}\n", .{ instruction, next.? });
+                try out.print("    {} {}\n", .{ instruction, next.? });
                 instruction = try parser.nextInstruction(r) orelse return;
             } else {
-                try out.print("{}\n", .{instruction});
+                try out.print("    {}\n", .{instruction});
                 instruction = next orelse return;
             }
         },

@@ -80,6 +80,25 @@ pub const Parser = struct {
     }
 };
 
+pub const Ast = struct {
+    nodes: []const Node,
+    errors: []const Error,
+
+    pub const Error = struct {
+        span: Span,
+    };
+    pub const Node = struct {};
+};
+
+pub const Span = struct {
+    start: u32,
+    end: u32,
+
+    pub fn slice(span: Span, code: []const u8) []const u8 {
+        return code[span.start..span.end];
+    }
+};
+
 pub const Statement = struct {
     src: []const u8,
     action: Action,

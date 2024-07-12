@@ -87,6 +87,7 @@ const Command = union(Mode) {
                     .file => fatalWithHelp("--stdin and FILE are incompatible", .{}),
                 };
                 mode = .stdin;
+                continue;
             }
 
             if (std.mem.startsWith(u8, args[i], "--"))
