@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("../root.zig");
+const root = @import("../tiny.zig");
 
 const Allocator = std.mem.Allocator;
 const Span = root.Span;

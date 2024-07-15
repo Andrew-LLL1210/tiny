@@ -1,6 +1,6 @@
 const Tokenizer = @This();
 const std = @import("std");
-const root = @import("../root.zig");
+const root = @import("../tiny.zig");
 const parse = @import("parse.zig");
 
 const AstError = parse.AstError;
@@ -183,12 +183,14 @@ fn expectConsistency(source: []const u8) !void {
     try std.testing.expect(t2.next(source) == null);
 }
 
+const test_data = @import("test-data");
+
 test "consistency" {
     // output of comment and non-comment mode should only differ by the presence/absence of
     // comment tokens
 
     const cases = [_][]const u8{
-        @embedFile("test/hello.tny"),
+        test_data.hello,
     };
 
     for (cases) |case| try expectConsistency(case);

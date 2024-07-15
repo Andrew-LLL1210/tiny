@@ -5,26 +5,34 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const tiny = b.addModule("tiny", .{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("src/tiny.zig"),
         .target = target,
         .optimize = optimize,
         .strip = false,
     });
 
-    const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
+    const test_data = b.addModule("test-data", .{
+        .root_source_file = b.path("test-data/data.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = false,
+    });
+
+    const tests = b.addTest(.{
+        .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
+    tests.root_module.addImport("test-data", test_data);
+    const run_unit_tests = b.addRunArtifact(tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
 
     const exe = b.addExecutable(.{
         .name = "tiny",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/cli.zig"),
         .target = target,
         .optimize = optimize,
     });

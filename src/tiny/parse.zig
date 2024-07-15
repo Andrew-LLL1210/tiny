@@ -1,7 +1,7 @@
 const std = @import("std");
 const Tokenizer = @import("Tokenizer.zig");
 
-const root = @import("../root.zig");
+const root = @import("../tiny.zig");
 const Span = root.Span;
 const Token = Tokenizer.Token;
 

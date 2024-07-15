@@ -1,5 +1,5 @@
 const std = @import("std");
-const cli = @import("cli/fmt.zig");
+const subcommands = @import("cli/subcommands.zig");
 
 // cli design ripped from github.com/kristoff-it/ziggy on 2024-05-25
 pub const Command = enum { run, fmt, check, flow, help };
@@ -25,10 +25,10 @@ pub fn main() !void {
     };
 
     (switch (command) {
-        .fmt => cli.fmt_exe(args[2..], gpa),
-        .check => cli.check_exe(args[2..], gpa),
+        .fmt => subcommands.fmt_exe(args[2..], gpa),
+        .check => subcommands.check_exe(args[2..], gpa),
         .flow => @panic("TODO"),
-        .run => cli.run_exe(args[2..], gpa),
+        .run => subcommands.run_exe(args[2..], gpa),
         .help => fatalHelp(),
     }) catch |err| switch (err) {
         error.ReportedError => ok = false,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const root = @import("../root.zig");
+const root = @import("../tiny.zig");
 
 /// A Word is in the range [-10000, 10000];
 pub const Word = i32;
