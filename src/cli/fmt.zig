@@ -5,10 +5,26 @@ const Node = tiny.parse.Ast.Node;
 
 pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .fmt;
-    const command = Command.parse(args);
+    const command = try Command.parse(args);
+
+    const stderr = std.io.getStdErr().writer();
     const source = getSource(gpa, command) orelse return;
     defer gpa.free(source);
-    const res = try formatSource(gpa, source);
+
+    const ast = try tiny.Ast.init(gpa, source, true);
+    defer gpa.free(ast.nodes);
+    defer gpa.free(ast.errors);
+
+    if (ast.errors.len > 0) {
+        try printErrors(ast, gpa, source, command.file_name(), stderr);
+        return error.ReportedError;
+    }
+
+    var w = std.ArrayList(u8).init(gpa);
+    errdefer w.deinit();
+
+    try ast.render(source, w.writer());
+    const res = try w.toOwnedSlice();
     defer gpa.free(res);
 
     switch (command) {
@@ -30,7 +46,7 @@ pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
 
 pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .check;
-    const command = Command.parse(args);
+    const command = try Command.parse(args);
     const stdout = std.io.getStdOut().writer();
     const source = getSource(gpa, command) orelse return;
     defer gpa.free(source);
@@ -50,7 +66,7 @@ pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
 
 pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .run;
-    const command = Command.parse(args);
+    const command = try Command.parse(args);
     const file_name = command.file_name();
     const stderr = std.io.getStdErr().writer();
 
@@ -118,19 +134,6 @@ fn getSource(gpa: Allocator, command: Command) ?[]const u8 {
     }
 }
 
-/// caller owns returned memory
-fn formatSource(gpa: std.mem.Allocator, source: []const u8) ![]const u8 {
-    const ast = try tiny.Ast.init(gpa, source, true);
-    defer gpa.free(ast.nodes);
-    defer gpa.free(ast.errors);
-
-    var w = std.ArrayList(u8).init(gpa);
-    errdefer w.deinit();
-
-    try ast.render(source, w.writer());
-    return try w.toOwnedSlice();
-}
-
 fn printErrors(ast: tiny.Ast, gpa: Allocator, source: []const u8, file_name: []const u8, w: anytype) !void {
     for (ast.errors) |err| {
         const line = err.span.line(source);
@@ -187,43 +190,44 @@ const Command = union(Mode) {
         };
     }
 
-    fn parse(args: [][]const u8) Command {
+    fn parse(args: [][]const u8) error{ReportedError}!Command {
         var file: ?[]const u8 = null;
         var mode: ?Mode = null;
 
         var i: usize = 0;
         while (i < args.len) : (i += 1) {
-            if (eql(u8, args[i], "-h") or eql(u8, args[i], "--help")) fatalHelp();
+            if (eql(u8, args[i], "-h") or eql(u8, args[i], "--help")) return fatalHelp();
 
             if (args[i][0] == '-' and args[i][1] != '-') {
                 for (args[i][1..]) |f| switch (f) {
-                    else => fatalWithHelp("unknown option: -{c}\n", .{f}),
+                    else => return fatalWithHelp("unknown option: -{c}\n", .{f}),
                 };
             }
 
             if (std.mem.eql(u8, args[i], "--stdin")) {
                 if (mode) |m| switch (m) {
-                    .stdin => fatalWithHelp("--stdin specified more than once", .{}),
-                    .file => fatalWithHelp("--stdin and FILE are incompatible", .{}),
+                    .stdin => return fatalWithHelp("--stdin specified more than once", .{}),
+                    .file => return fatalWithHelp("--stdin and FILE are incompatible", .{}),
                 };
                 mode = .stdin;
                 continue;
             }
 
             if (std.mem.startsWith(u8, args[i], "--"))
-                fatalWithHelp("unknown option: {s}\n", .{args[i]});
+                return fatalWithHelp("unknown option: {s}\n", .{args[i]});
 
-            if (file != null) fatalWithHelp("unexpected positional argument '{s}'\n", .{args[i]});
+            if (file != null)
+                return fatalWithHelp("unexpected positional argument '{s}'\n", .{args[i]});
             if (mode) |m| switch (m) {
-                .stdin => fatalWithHelp("--stdin and FILE are incompatible", .{}),
-                .file => fatalWithHelp("FILE specified more than once", .{}),
+                .stdin => return fatalWithHelp("--stdin and FILE are incompatible", .{}),
+                .file => return fatalWithHelp("FILE specified more than once", .{}),
             };
 
             mode = .file;
             file = args[i];
         }
 
-        const m = mode orelse fatalWithHelp("no input specified\n", .{});
+        const m = mode orelse return fatalWithHelp("no input specified\n", .{});
 
         return switch (m) {
             .file => .{ .file = file.? },
@@ -231,7 +235,7 @@ const Command = union(Mode) {
         };
     }
 
-    fn fatalHelp() noreturn {
+    fn fatalHelp() error{ReportedError} {
         std.debug.print(
             \\
             \\Usage: tiny {s} [OPTIONS] (--stdin | FILE)
@@ -244,17 +248,17 @@ const Command = union(Mode) {
             \\
             \\
         , .{@tagName(Command.subcommand)});
-        std.process.exit(1);
+        return error.ReportedError;
     }
 
-    fn fatalWithHelp(comptime fmt: []const u8, args: anytype) noreturn {
+    fn fatalWithHelp(comptime fmt: []const u8, args: anytype) error{ReportedError} {
         std.debug.print(fmt, args);
-        fatalHelp();
+        return fatalHelp();
     }
 };
-fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
+fn fatal(comptime fmt: []const u8, args: anytype) error{ReportedError} {
     std.debug.print(fmt, args);
-    std.process.exit(1);
+    return error.ReportedError;
 }
 
 const Allocator = std.mem.Allocator;

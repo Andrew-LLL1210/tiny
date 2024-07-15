@@ -12,6 +12,7 @@ pub const AstError = enum {
     illegal_number_character,
     unrecognized_escape_sequence,
     number_literal_too_large,
+    unclosed_string,
 
     // thrown by the ast generator
     blank_label,
@@ -72,13 +73,8 @@ pub const Ast = struct {
 
         while (tokenizer.next(source)) |token| switch (token) {
             .newline => {},
-            .comment, .parse_error => {
-                try nodes.append(.{ .comment = token.span() });
-                if (token == .parse_error) try errors.append(.{
-                    .span = token.span(),
-                    .tag = token.parse_error.tag,
-                });
-            },
+            .parse_error => |err| try errors.append(err),
+            .comment => try nodes.append(.{ .comment = token.span() }),
             .number, .string => {
                 try nodes.append(.{ .op_with_arg = .{
                     .span = token.span(),
@@ -104,22 +100,11 @@ pub const Ast = struct {
             .identifier => {
                 const token2 = tokenizer.next(source) orelse tokenizer.newline();
                 switch (token2) {
-                    .parse_error => {
-                        try nodes.append(.{ .op_with_arg = .{
-                            .span = joinSpans(token.span(), token2.span()),
-                            .name = token.span(),
-                            .argument = token2,
-                        } });
-                        try errors.append(.{
-                            .span = token2.span(),
-                            .tag = token2.parse_error.tag,
-                        });
-                    },
+                    .parse_error => |err| try errors.append(err),
                     .newline, .comment => {
                         try nodes.append(.{ .op_single = token.span() });
 
-                        const opcode = std.meta.stringToEnum(
-                            Opcode,
+                        const opcode = mnemonic_map.get(
                             token.span().slice(source),
                         ) orelse {
                             try errors.append(.{
@@ -144,8 +129,7 @@ pub const Ast = struct {
                             .argument = token2,
                         } });
 
-                        const opcode = std.meta.stringToEnum(
-                            Opcode,
+                        const opcode = mnemonic_map.get(
                             token.span().slice(source),
                         ) orelse {
                             try errors.append(.{
@@ -345,3 +329,44 @@ fn kind(token: @import("Tokenizer.zig").Token) ArgKind {
         else => unreachable,
     };
 }
+
+const MnemonicMap = std.StaticStringMapWithEql(Opcode, std.static_string_map.eqlAsciiIgnoreCase);
+pub const mnemonic_map = MnemonicMap.initComptime(
+    //blk: {
+    //    var map: []struct { []const u8, Opcode } = &.{};
+    //    for (std.enums.values(Opcode)) |name| {
+    //        map = map ++ .{ name, std.enums.nameCast(Opcode, name) };
+    //    }
+    //    break :blk map;
+    //},
+    &[_]struct { []const u8, Opcode }{
+        .{ "stop", .stop },
+        .{ "ld", .ld },
+        .{ "lda", .lda },
+        .{ "ldi", .ldi },
+        .{ "st", .st },
+        .{ "sti", .sti },
+        .{ "add", .add },
+        .{ "sub", .sub },
+        .{ "mul", .mul },
+        .{ "div", .div },
+        .{ "in", .in },
+        .{ "out", .out },
+        .{ "jmp", .jmp },
+        .{ "jg", .jg },
+        .{ "jl", .jl },
+        .{ "je", .je },
+        .{ "call", .call },
+        .{ "ret", .ret },
+        .{ "push", .push },
+        .{ "pop", .pop },
+        .{ "ldparam", .ldparam },
+        .{ "jge", .jge },
+        .{ "jle", .jle },
+        .{ "jne", .jne },
+        .{ "pusha", .pusha },
+        .{ "db", .db },
+        .{ "ds", .ds },
+        .{ "dc", .dc },
+    },
+);

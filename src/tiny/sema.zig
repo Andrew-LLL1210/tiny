@@ -9,6 +9,7 @@ const HashMap = @import("insensitive.zig").HashMap;
 const Opcode = root.parse.Opcode;
 const ArgKind = root.parse.ArgKind;
 const Word = root.Word;
+const mnemonic_map = root.parse.mnemonic_map;
 
 pub const Assembly = struct {
     listing: []const ?Word,
@@ -73,13 +74,13 @@ pub fn assemble(gpa: Allocator, ast: Ast, source: []const u8) Allocator.Error!As
         },
 
         .op_single => |span| {
-            const opcode = std.meta.stringToEnum(Opcode, span.slice(source)) orelse unreachable;
+            const opcode = mnemonic_map.get(span.slice(source)) orelse unreachable;
             const word = @intFromEnum(opcode) * 1000;
             try listing.append(gpa, .{ .word = @intCast(word), .node_idx = idx });
         },
 
         .op_with_arg => |op| {
-            const opcode = std.meta.stringToEnum(Opcode, op.name.slice(source)) orelse unreachable;
+            const opcode = mnemonic_map.get(op.name.slice(source)) orelse unreachable;
             if (opcode.isDirective()) switch (opcode) {
                 .dc => try assembleString(
                     op.argument.string.slice(source),

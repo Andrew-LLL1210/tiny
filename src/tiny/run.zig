@@ -189,14 +189,6 @@ pub fn runMachine(
     }
 }
 
-const File = std.fs.File;
-const Reporter = @import("report.zig").Reporter;
-const ReportedError = Reporter.ReportedError;
-
-const overflow_msg = "Overflow";
-const null_argument_msg = "Use of null value '{s}'";
-const non_exe_instruction_msg = "Reached a non-executable instruction at address {d}";
-
 const printInteger = 900;
 const printString = 925;
 const inputInteger = 950;

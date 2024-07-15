@@ -18,7 +18,7 @@ pub const Token = union(enum) {
     colon: usize,
     newline: usize,
 
-    parse_error: struct { span: Span, tag: AstError },
+    parse_error: parse.Ast.Error,
 
     pub fn span(token: Token) Span {
         return switch (token) {
@@ -37,8 +37,6 @@ pub fn newline(self: *const Tokenizer) Token {
 
 pub fn next(self: *Tokenizer, src: []const u8) ?Token {
     var start = self.idx;
-    var end = start + 1;
-    defer self.idx = end;
 
     while (start < src.len and
         src[start] != '\n' and
@@ -46,6 +44,14 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
         start += 1;
 
     if (start >= src.len) return null;
+
+    var end = start + 1;
+    var skip = false;
+    defer {
+        if (skip) {
+            self.idx = std.mem.indexOfScalarPos(u8, src, start, '\n') orelse src.len;
+        } else self.idx = end;
+    }
 
     switch (src[start]) {
         '\n' => {
@@ -71,35 +77,43 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
 
             return .{ .comment = .{ .start = start, .end = token_end + 1 } };
         },
-        'A'...'Z', 'a'...'z', '_', '&' => {
+        'A'...'Z', 'a'...'z', '_', '&', '/' => {
             end = for (src[start..], start..) |c, i| switch (c) {
-                'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9' => {},
+                'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9', '/' => {},
                 else => break i,
             } else src.len;
 
             //boundary condition
-            if (end < src.len and src[end] == '-')
+            if (end < src.len and src[end] == '-') {
+                skip = true;
                 return .{ .parse_error = .{
                     .span = .{ .start = start, .end = end },
                     .tag = .illegal_identifier_character,
                 } };
+            }
 
             return .{ .identifier = .{ .start = start, .end = end } };
         },
         '-', '0'...'9' => {
             end = std.mem.indexOfNonePos(u8, src, start, "0123456789") orelse src.len;
             const max_len: usize = if (src[start] == '-') 6 else 5;
-            if (end - start > max_len) return .{ .parse_error = .{
-                .span = .{ .start = start, .end = end },
-                .tag = .number_literal_too_large,
-            } };
+            if (end - start > max_len) {
+                skip = true;
+                return .{ .parse_error = .{
+                    .span = .{ .start = start, .end = end },
+                    .tag = .number_literal_too_large,
+                } };
+            }
 
             // boundary condition
             if (end < src.len) switch (src[end]) {
-                'A'...'Z', 'a'...'z', '_', '&' => return .{ .parse_error = .{
-                    .span = .{ .start = start, .end = end },
-                    .tag = .illegal_number_character,
-                } },
+                'A'...'Z', 'a'...'z', '_', '&' => {
+                    skip = true;
+                    return .{ .parse_error = .{
+                        .span = .{ .start = start, .end = end },
+                        .tag = .illegal_number_character,
+                    } };
+                },
                 else => {},
             };
 
@@ -113,19 +127,43 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
             var escape = true;
             end = 1 + for (src[start..], start..) |c, i| (if (escape) switch (c) {
                 '0', 'r', 'n', 't', '"', '\'' => escape = false,
-                else => return .{ .parse_error = .{
-                    .span = .{ .start = i - 1, .end = i + 1 },
-                    .tag = .unrecognized_escape_sequence,
-                } },
+                '\n' => {
+                    skip = true;
+                    return .{ .parse_error = .{
+                        .span = .{ .start = start, .end = i },
+                        .tag = .unclosed_string,
+                    } };
+                },
+                else => {
+                    skip = true;
+                    return .{ .parse_error = .{
+                        .span = .{ .start = i - 1, .end = i + 1 },
+                        .tag = .unrecognized_escape_sequence,
+                    } };
+                },
             } else switch (c) {
                 '\\' => escape = true,
                 '"', '\'' => if (c == src[start]) break i,
+                '\n' => {
+                    skip = true;
+                    return .{ .parse_error = .{
+                        .span = .{ .start = start, .end = i },
+                        .tag = .unclosed_string,
+                    } };
+                },
                 else => {},
-            }) else src.len;
+            }) else {
+                skip = true;
+                return .{ .parse_error = .{
+                    .span = .{ .start = start, .end = src.len },
+                    .tag = .unclosed_string,
+                } };
+            };
 
             return .{ .string = .{ .start = start, .end = end } };
         },
         else => {
+            skip = true;
             return .{ .parse_error = .{
                 .span = .{ .start = start, .end = start + 1 },
                 .tag = .illegal_character,
