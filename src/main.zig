@@ -1,14 +1,12 @@
 const std = @import("std");
-const fmt_cli = @import("cli/fmt.zig");
-const run_cli = @import("cli/run.zig");
-const flow_cli = @import("cli/flow.zig");
+const cli = @import("cli/fmt.zig");
 
 // cli design ripped from github.com/kristoff-it/ziggy on 2024-05-25
-pub const Command = enum { run, fmt, flow, help };
+pub const Command = enum { run, fmt, check, flow, help };
 
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa_impl.deinit();
+    defer std.debug.assert(gpa_impl.deinit() == .ok);
     const gpa = gpa_impl.allocator();
 
     const args = std.process.argsAlloc(gpa) catch fatal("oom\n", .{});
@@ -21,13 +19,19 @@ pub fn main() !void {
     };
 
     switch (command) {
-        .fmt => fmt_cli.run(args[2..], gpa) catch |err| {
+        .fmt => cli.fmt_exe(args[2..], gpa) catch |err| {
             std.debug.print("unexpected error: {s}\n", .{@errorName(err)});
             return;
         },
-        .run => run_cli.run(args[2..], gpa),
+        .check => cli.check_exe(args[2..], gpa) catch |err| {
+            std.debug.print("unexpected error: {s}\n", .{@errorName(err)});
+            return;
+        },
+        .flow => @panic("TODO"),
+        .run => cli.run_exe(args[2..], gpa) catch |err| {
+            std.debug.print("unexpected error: {s}\n", .{@errorName(err)});
+        },
         .help => fatalHelp(),
-        else => fatal("TODO command {s}\n", .{@tagName(command)}),
     }
 }
 
@@ -41,8 +45,9 @@ fn fatalHelp() noreturn {
         \\Usage: tiny COMMAND [OPTIONS]
         \\
         \\Commands:
-        \\  run          Run any number of tiny files concatenated together
-        \\  fmt          Format tiny files
+        \\  run          Interpret a tiny program
+        \\  check        Check tiny program for syntax errors
+        \\  fmt          Format a tiny program
         \\  flow         Print and colorize control flow in a tiny program
         \\  help         Show this menu and exit
         \\

@@ -1,4 +1,5 @@
 const std = @import("std");
+const root = @import("../root.zig");
 
 /// A Word is in the range [-10000, 10000];
 pub const Word = i32;
@@ -10,9 +11,10 @@ pub const Machine = struct {
     sp: u32 = 900,
     bp: u32 = 900,
 
-    pub fn load(listing: Listing) Machine {
+    pub fn load(listing: []const ?Word) Machine {
         var machine = Machine{};
-        for (listing, 0..) |entry, i| machine.memory[i] = entry.word;
+        std.debug.assert(listing.len <= machine.memory.len);
+        for (listing, 0..) |word, i| machine.memory[i] = word;
         return machine;
     }
 };
@@ -188,7 +190,6 @@ pub fn runMachine(
 }
 
 const File = std.fs.File;
-const Listing = @import("sema.zig").Listing;
 const Reporter = @import("report.zig").Reporter;
 const ReportedError = Reporter.ReportedError;
 
@@ -251,9 +252,7 @@ test runMachine {
     const out = std.io.getStdErr().writer();
     const in = std.io.GenericReader(void, error{}, readStub){ .context = {} };
     // machine that STOPS
-    var machine = Machine.load(&.{
-        .{ .word = 0 },
-    });
+    var machine = Machine.load(&.{0});
 
     try runMachine(&machine, in, out);
 }
