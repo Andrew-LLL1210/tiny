@@ -1,255 +1,198 @@
 const std = @import("std");
-const Tokenizer = @import("Tokenizer.zig");
+const tiny = @import("../tiny.zig");
+const Tokenizer = @import("tokenizer.zig");
+const run = @import("run.zig");
 
-const root = @import("../tiny.zig");
-const Span = root.Span;
+const Ast = @This();
+const Span = tiny.Span;
 const Token = Tokenizer.Token;
+const Machine = run.Machine;
+const Word = run.Word;
+const Arg = Word;
+const Opcode = run.Op;
+const Allocator = std.mem.Allocator;
 
-pub const AstError = enum {
-    // thrown by the tokenizer
-    illegal_character,
-    illegal_identifier_character,
-    illegal_number_character,
-    unrecognized_escape_sequence,
-    number_literal_too_large,
-    unclosed_string,
+statements: []const Statement,
+labels: []const LabelData,
+strings: []const Span,
+errors: []const Error,
 
-    // thrown by the ast generator
-    blank_label,
-    argument_without_op,
-    invalid_mnemonic,
-    invalid_argument,
-    expected_argument,
-    invalid_number_range,
-    expected_eol,
+pub const LabelData = struct {};
+
+pub const Error = struct {
+    span: Span,
+    tag: Tag,
+
+    pub const Tag = enum {
+        // thrown by the tokenizer
+        illegal_character,
+        illegal_identifier_character,
+        illegal_number_character,
+        unrecognized_escape_sequence,
+        number_literal_too_large,
+        unclosed_string,
+
+        // thrown by the ast generator
+        blank_label,
+        argument_without_op,
+        invalid_mnemonic,
+        invalid_argument,
+        expected_argument,
+        invalid_number_range,
+        expected_eol,
+    };
 };
 
-pub const Ast = struct {
-    nodes: []const Node,
-    errors: []const Error,
+pub const Node = union(enum) {
+    comment: Span,
+    label: [2]Span,
+    op_single: Span,
+    op_number: [2]Span,
+    op_string: [2]Span,
+    op_label: [2]Span,
 
-    pub const Error = struct {
-        span: Span,
-        tag: AstError,
-    };
-    pub const Node = union(enum) {
-        comment: Span,
-        label: struct {
-            span: Span,
-            name: Span,
-        },
-        op_single: Span,
-        op_with_arg: struct {
-            span: Span,
-            name: Span,
-            argument: Token,
-        },
-
-        fn render(node: Node, src: []const u8, w: anytype) !void {
-            switch (node) {
-                .comment => |c| try w.writeAll(c.slice(src)),
-                .label => |l| try w.print("{s}:", .{l.name.slice(src)}),
-                .op_single => |o| try w.writeAll(o.slice(src)),
-                .op_with_arg => |o| try w.print("{s} {s}", .{ o.name.slice(src), o.argument.span().slice(src) }),
-            }
+    fn render(node: Node, src: []const u8, w: anytype) !void {
+        switch (node) {
+            .comment, .op_single => |span| try w.writeAll(span.slice(src)),
+            .label => |spans| try w.print("{s}:", .{spans[0].slice(src)}),
+            .op_single => |spans| try w.print("{s} {s}", .{
+                spans[0].slice(src),
+                spans[1].slice(src),
+            }),
         }
-
-        pub fn span(node: Node) Span {
-            return switch (node) {
-                .comment, .op_single => |x| x,
-                inline .label, .op_with_arg => |x| x.span,
-            };
-        }
-    };
-
-    const AllocError = std.mem.Allocator.Error;
-    pub fn init(gpa: std.mem.Allocator, source: []const u8, want_comments: bool) AllocError!Ast {
-        var tokenizer: Tokenizer = .{ .want_comments = want_comments };
-
-        var nodes = std.ArrayList(Node).init(gpa);
-        var errors = std.ArrayList(Error).init(gpa);
-        errdefer nodes.deinit();
-        errdefer errors.deinit();
-
-        while (tokenizer.next(source)) |token| switch (token) {
-            .newline => {},
-            .parse_error => |err| try errors.append(err),
-            .comment => try nodes.append(.{ .comment = token.span() }),
-            .number, .string => {
-                try nodes.append(.{ .op_with_arg = .{
-                    .span = token.span(),
-                    .name = .{ .start = token.span().start, .end = token.span().start },
-                    .argument = token,
-                } });
-                try errors.append(.{
-                    .span = token.span(),
-                    .tag = .argument_without_op,
-                });
-            },
-            .colon => {
-                try nodes.append(.{ .label = .{
-                    .span = token.span(),
-                    .name = .{ .start = token.span().start, .end = token.span().start },
-                } });
-                try errors.append(.{
-                    .span = token.span(),
-                    .tag = .blank_label,
-                });
-            },
-
-            .identifier => {
-                const token2 = tokenizer.next(source) orelse tokenizer.newline();
-                switch (token2) {
-                    .parse_error => |err| try errors.append(err),
-                    .newline, .comment => {
-                        try nodes.append(.{ .op_single = token.span() });
-
-                        const opcode = mnemonic_map.get(
-                            token.span().slice(source),
-                        ) orelse {
-                            try errors.append(.{
-                                .span = token.span(),
-                                .tag = .invalid_mnemonic,
-                            });
-                            continue;
-                        };
-                        if (!opcode.acceptsArgKind(.none)) {
-                            try errors.append(.{
-                                .span = token.span(),
-                                .tag = .expected_argument,
-                            });
-                        }
-
-                        if (token2 == .comment) try nodes.append(.{ .comment = token2.span() });
-                    },
-                    .number, .string, .identifier => {
-                        try nodes.append(.{ .op_with_arg = .{
-                            .span = joinSpans(token.span(), token2.span()),
-                            .name = token.span(),
-                            .argument = token2,
-                        } });
-
-                        const opcode = mnemonic_map.get(
-                            token.span().slice(source),
-                        ) orelse {
-                            try errors.append(.{
-                                .span = token.span(),
-                                .tag = .invalid_mnemonic,
-                            });
-                            continue;
-                        };
-
-                        const argument_error: Error = .{ .span = token2.span(), .tag = .invalid_argument };
-                        const range_error: Error = .{ .span = token2.span(), .tag = .invalid_number_range };
-                        if (opcode.isDirective()) switch (opcode) {
-                            .dc => if (token2 != .string) try errors.append(argument_error),
-                            .ds => {
-                                if (token2 != .number) {
-                                    try errors.append(argument_error);
-                                    continue;
-                                }
-
-                                const num = token2.number.value;
-                                if (0 <= num and num <= 999) continue;
-                                try errors.append(range_error);
-                            },
-                            .db => {
-                                if (token2 != .number) {
-                                    try errors.append(argument_error);
-                                    continue;
-                                }
-
-                                const num = token2.number.value;
-                                if (-99999 <= num and num <= 99999) continue;
-                                try errors.append(range_error);
-                            },
-                            else => unreachable,
-                        } else if (token2 == .string or !opcode.acceptsArgKind(kind(token2))) {
-                            try errors.append(argument_error);
-                        }
-
-                        const backup = tokenizer;
-                        defer tokenizer = backup;
-                        if (tokenizer.next(source)) |token3| switch (token3) {
-                            .comment, .newline => {},
-                            else => try errors.append(.{
-                                .span = token3.span(),
-                                .tag = .expected_eol,
-                            }),
-                        };
-                    },
-                    .colon => {
-                        try nodes.append(.{ .label = .{
-                            .span = joinSpans(token.span(), token2.span()),
-                            .name = token.span(),
-                        } });
-                    },
-                }
-            },
-        };
-
-        return .{
-            .nodes = try nodes.toOwnedSlice(),
-            .errors = try errors.toOwnedSlice(),
-        };
     }
 
-    pub fn render(ast: Ast, src: []const u8, w: anytype) !void {
-        var spacing: Spacing = .next_line;
-        for (ast.nodes, 0..) |node, i| {
-            const indent: bool =
-                (i == 0 or spacing != .same_line) and
-                for (ast.nodes[i..]) |scan| switch (scan) {
-                .comment => {},
-                .label => break false,
-                else => break true,
-            } else false;
+    pub fn jointSpan(node: Node) Span {
+        return switch (node) {
+            .comment, .op_single => |x| x,
+            else => |xs| .{ .start = xs[0].start, .end = xs[1].end },
+        };
+    }
+};
 
-            if (indent) try w.writeAll("    ");
+pub const Statement = union(enum) {
+    comment: Span,
+    operation: struct { Opcode, union(enum) { label: usize, number: Arg } },
+    directive: union(enum) { dc: usize, db: Word, ds: usize },
+};
 
-            const next = if (i + 1 < ast.nodes.len) ast.nodes[i + 1] else {
+pub fn deinit(ast: Ast, gpa: Allocator) void {}
+
+const AllocError = std.mem.Allocator.Error;
+pub fn init(gpa: std.mem.Allocator, source: []const u8, want_comments: bool) AllocError!Ast {
+    var tokenizer: Tokenizer = .{ .want_comments = want_comments };
+
+    var nodes = std.ArrayList(Node).init(gpa);
+    var errors = std.ArrayList(Error).init(gpa);
+    errdefer nodes.deinit();
+    errdefer errors.deinit();
+
+    while (tokenizer.next(source)) |token| switch (token) {
+        .newline => {},
+        .parse_error => |err| try errors.append(err),
+        .comment => try nodes.append(.{ .comment = token.span() }),
+        .number, .string => try errors.append(.{
+            .span = token.span(),
+            .tag = .argument_without_op,
+        }),
+        .colon => try errors.append(.{
+            .span = token.span(),
+            .tag = .blank_label,
+        }),
+        .identifier => {
+            const token2 = tokenizer.next(source) orelse tokenizer.newline();
+            switch (token2) {
+                .parse_error => |err| try errors.append(err),
+                .newline, .comment => {
+                    try nodes.append(.{ .op_single = token.span() });
+                    if (token2 == .comment) try nodes.append(.{ .comment = token2.span() });
+                },
+                .number, .string, .identifier => {
+                    try nodes.append(switch (token2) {
+                        .number => .{ .op_number = .{ token.span(), token2.span() } },
+                        .string => .{ .op_string = .{ token.span(), token2.span() } },
+                        .identifier => .{ .op_label = .{ token.span(), token2.span() } },
+                        else => unreachable,
+                    });
+
+                    const backup = tokenizer;
+                    defer tokenizer = backup;
+                    if (tokenizer.next(source)) |token3| switch (token3) {
+                        .comment, .newline => {},
+                        else => try errors.append(.{
+                            .span = token3.span(),
+                            .tag = .expected_eol,
+                        }),
+                    };
+                },
+                .colon => try nodes.append(.{ .label = .{ token.span(), token2.span() } }),
+            }
+        },
+    };
+
+    const nodes_slice = try nodes.toOwnedSlice();
+
+    analyze(gpa, nodes_slice, errors);
+
+    return .{
+        .nodes = try nodes.toOwnedSlice(),
+        .errors = try errors.toOwnedSlice(),
+    };
+}
+
+pub fn render(ast: Ast, src: []const u8, w: anytype) !void {
+    var spacing: Spacing = .next_line;
+    for (ast.nodes, 0..) |node, i| {
+        const indent: bool =
+            (i == 0 or spacing != .same_line) and
+            for (ast.nodes[i..]) |scan| switch (scan) {
+            .comment => {},
+            .label => break false,
+            else => break true,
+        } else false;
+
+        if (indent) try w.writeAll("    ");
+
+        const next = if (i + 1 < ast.nodes.len) ast.nodes[i + 1] else {
+            try w.print("{}\n", .{renderNode(node, src)});
+            break;
+        };
+
+        spacing = spaceBetween(node.span(), next.span(), src);
+        switch (spaceBetween(node.span(), next.span(), src)) {
+            .same_line => {
+                try w.print("{} ", .{renderNode(node, src)});
+            },
+            .next_line => {
                 try w.print("{}\n", .{renderNode(node, src)});
-                break;
-            };
-
-            spacing = spaceBetween(node.span(), next.span(), src);
-            switch (spaceBetween(node.span(), next.span(), src)) {
-                .same_line => {
-                    try w.print("{} ", .{renderNode(node, src)});
-                },
-                .next_line => {
-                    try w.print("{}\n", .{renderNode(node, src)});
-                },
-                .line_between => {
-                    try w.print("{}\n\n", .{renderNode(node, src)});
-                },
-            }
+            },
+            .line_between => {
+                try w.print("{}\n\n", .{renderNode(node, src)});
+            },
         }
     }
+}
 
-    pub const NodeRenderer = struct {
-        source: []const u8,
-        node: Node,
+pub fn analyze(gpa: Allocator, nodes: []const Node, errors: ArrayList(Error)) Air {}
 
-        pub fn format(
-            x: NodeRenderer,
-            comptime fmt: []const u8,
-            options: std.fmt.FormatOptions,
-            writer: anytype,
-        ) !void {
-            _ = fmt;
-            _ = options;
-            try x.node.render(x.source, writer);
-        }
-    };
+pub const NodeRenderer = struct {
+    source: []const u8,
+    node: Node,
 
-    fn renderNode(node: Node, src: []const u8) NodeRenderer {
-        return .{ .source = src, .node = node };
+    pub fn format(
+        x: NodeRenderer,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try x.node.render(x.source, writer);
     }
 };
 
-fn joinSpans(span1: Span, span2: Span) Span {
-    return .{ .start = span1.start, .end = span2.end };
+fn renderNode(node: Node, src: []const u8) NodeRenderer {
+    return .{ .source = src, .node = node };
 }
 
 const Spacing = enum { same_line, next_line, line_between };
@@ -266,107 +209,3 @@ fn spaceBetween(span1: Span, span2: Span, src: []const u8) Spacing {
         else => unreachable,
     };
 }
-
-pub const Opcode = enum(u32) {
-    stop,
-    ld,
-    ldi,
-    lda,
-    st,
-    sti,
-    add,
-    sub,
-    mul,
-    div,
-    in,
-    out,
-    jmp,
-    jg,
-    jl,
-    je,
-    call,
-    ret,
-    push,
-    pop,
-    ldparam,
-    jge,
-    jle,
-    jne,
-    pusha = 26,
-    db,
-    ds,
-    dc,
-
-    pub fn isDirective(opcode: Opcode) bool {
-        return switch (opcode) {
-            .db, .ds, .dc => true,
-            else => false,
-        };
-    }
-
-    pub fn acceptsArgKind(opcode: Opcode, arg_kind: ArgKind) bool {
-        return opcode.acceptedArgKinds().contains(arg_kind);
-    }
-
-    const Set = std.EnumSet(ArgKind);
-    pub fn acceptedArgKinds(opcode: Opcode) Set {
-        return switch (opcode) {
-            .db, .ds, .dc => Set.initEmpty(),
-            .stop, .in, .out, .ret => Set.init(.{ .none = true }),
-            .push, .pop => Set.init(.{ .none = true, .label = true }),
-            .ldparam => Set.init(.{ .immediate = true }),
-            .ldi, .lda, .st, .sti, .jmp, .jg, .jl, .je, .call, .jge, .jle, .jne, .pusha => Set.init(.{ .label = true }),
-            .ld, .add, .sub, .mul, .div => Set.init(.{ .immediate = true, .label = true }),
-        };
-    }
-};
-
-pub const ArgKind = enum { none, immediate, label };
-fn kind(token: @import("Tokenizer.zig").Token) ArgKind {
-    return switch (token) {
-        .identifier => .label,
-        .number => .immediate,
-        else => unreachable,
-    };
-}
-
-const MnemonicMap = std.StaticStringMapWithEql(Opcode, std.static_string_map.eqlAsciiIgnoreCase);
-pub const mnemonic_map = MnemonicMap.initComptime(
-    //blk: {
-    //    var map: []struct { []const u8, Opcode } = &.{};
-    //    for (std.enums.values(Opcode)) |name| {
-    //        map = map ++ .{ name, std.enums.nameCast(Opcode, name) };
-    //    }
-    //    break :blk map;
-    //},
-    &[_]struct { []const u8, Opcode }{
-        .{ "stop", .stop },
-        .{ "ld", .ld },
-        .{ "lda", .lda },
-        .{ "ldi", .ldi },
-        .{ "st", .st },
-        .{ "sti", .sti },
-        .{ "add", .add },
-        .{ "sub", .sub },
-        .{ "mul", .mul },
-        .{ "div", .div },
-        .{ "in", .in },
-        .{ "out", .out },
-        .{ "jmp", .jmp },
-        .{ "jg", .jg },
-        .{ "jl", .jl },
-        .{ "je", .je },
-        .{ "call", .call },
-        .{ "ret", .ret },
-        .{ "push", .push },
-        .{ "pop", .pop },
-        .{ "ldparam", .ldparam },
-        .{ "jge", .jge },
-        .{ "jle", .jle },
-        .{ "jne", .jne },
-        .{ "pusha", .pusha },
-        .{ "db", .db },
-        .{ "ds", .ds },
-        .{ "dc", .dc },
-    },
-);

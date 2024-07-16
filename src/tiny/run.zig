@@ -201,7 +201,7 @@ fn opFromCode(code: u32) ?Op {
     };
 }
 
-const Op = enum(u32) {
+pub const Op = enum(u32) {
     stop,
     ld,
     ldi,
