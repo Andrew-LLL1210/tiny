@@ -1,5 +1,5 @@
     jmp main
-string: dc 'hello world!\n' ; hello
+string: dc "hello world!\n" ; hello
     push
 
 ; entry point of program

@@ -1,9 +1,9 @@
 const Tokenizer = @This();
 const std = @import("std");
-const root = @import("../tiny.zig");
+const lib = @import("span.zig");
 const parse = @import("parse.zig");
 
-const Span = root.Span;
+const Span = lib.Span;
 
 want_comments: bool,
 idx: usize = 0,

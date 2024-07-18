@@ -23,11 +23,17 @@ pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
     }
 
     const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
+    defer air.deinit(gpa);
 
     var w = std.ArrayList(u8).init(gpa);
     errdefer w.deinit();
 
-    try air.render(source, w.writer());
+    if (errors.items.len > 0) {
+        try tiny.parse.renderNodes(nodes, source, w.writer());
+    } else {
+        try tiny.parse.renderAir(air, source, w.writer());
+    }
+
     const res = try w.toOwnedSlice();
     defer gpa.free(res);
 
@@ -70,23 +76,6 @@ pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
             command.file_name(),
             stdout,
         );
-    } else {
-        for (air.statements) |statement| switch (statement) {
-            .directive => {},
-            .comment => {},
-            .mark_label => |idx| try stdout.print("[label {d}]:\n", .{idx}),
-            .operation => |operation| switch (operation[1]) {
-                .none => try stdout.print("    {s}\n", .{@tagName(operation[0])}),
-                .label => |idx| try stdout.print("    {s} [label {d}]\n", .{
-                    @tagName(operation[0]),
-                    idx,
-                }),
-                .number => |number| try stdout.print("    {s} {d}\n", .{
-                    @tagName(operation[0]),
-                    number,
-                }),
-            },
-        };
     }
 }
 
