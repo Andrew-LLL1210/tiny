@@ -3,7 +3,6 @@ const std = @import("std");
 const root = @import("../tiny.zig");
 const parse = @import("parse.zig");
 
-const AstError = parse.AstError;
 const Span = root.Span;
 
 want_comments: bool,
@@ -18,13 +17,18 @@ pub const Token = union(enum) {
     colon: usize,
     newline: usize,
 
-    parse_error: parse.Ast.Error,
+    parse_error: parse.Error,
 
     pub fn span(token: Token) Span {
         return switch (token) {
             .comment, .identifier, .string => |res| return res,
             .colon, .newline => |idx| return .{ .start = idx, .end = idx + 1 },
-            inline .number, .parse_error => |obj| return obj.span,
+            .number => |obj| obj.span,
+            .parse_error => |err| switch (err) {
+                .duplicate_label => unreachable,
+                .builtin_label_redefinition => unreachable,
+                inline else => |res| res,
+            },
         };
     }
 };
@@ -87,8 +91,7 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
             if (end < src.len and src[end] == '-') {
                 skip = true;
                 return .{ .parse_error = .{
-                    .span = .{ .start = start, .end = end },
-                    .tag = .illegal_identifier_character,
+                    .illegal_identifier_character = .{ .start = end, .end = end + 1 },
                 } };
             }
 
@@ -100,8 +103,7 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
             if (end - start > max_len) {
                 skip = true;
                 return .{ .parse_error = .{
-                    .span = .{ .start = start, .end = end },
-                    .tag = .number_literal_too_large,
+                    .number_literal_too_large = .{ .start = start, .end = end },
                 } };
             }
 
@@ -110,8 +112,7 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
                 'A'...'Z', 'a'...'z', '_', '&' => {
                     skip = true;
                     return .{ .parse_error = .{
-                        .span = .{ .start = start, .end = end },
-                        .tag = .illegal_number_character,
+                        .illegal_number_character = .{ .start = end, .end = end + 1 },
                     } };
                 },
                 else => {},
@@ -130,15 +131,13 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
                 '\n' => {
                     skip = true;
                     return .{ .parse_error = .{
-                        .span = .{ .start = start, .end = i },
-                        .tag = .unclosed_string,
+                        .unclosed_string = .{ .start = start, .end = i },
                     } };
                 },
                 else => {
                     skip = true;
                     return .{ .parse_error = .{
-                        .span = .{ .start = i - 1, .end = i + 1 },
-                        .tag = .unrecognized_escape_sequence,
+                        .unrecognized_escape_sequence = .{ .start = i - 1, .end = i + 1 },
                     } };
                 },
             } else switch (c) {
@@ -147,16 +146,14 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
                 '\n' => {
                     skip = true;
                     return .{ .parse_error = .{
-                        .span = .{ .start = start, .end = i },
-                        .tag = .unclosed_string,
+                        .unclosed_string = .{ .start = start, .end = i },
                     } };
                 },
                 else => {},
             }) else {
                 skip = true;
                 return .{ .parse_error = .{
-                    .span = .{ .start = start, .end = src.len },
-                    .tag = .unclosed_string,
+                    .unclosed_string = .{ .start = start, .end = src.len },
                 } };
             };
 
@@ -165,8 +162,7 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
         else => {
             skip = true;
             return .{ .parse_error = .{
-                .span = .{ .start = start, .end = start + 1 },
-                .tag = .illegal_character,
+                .illegal_character = .{ .start = start, .end = start + 1 },
             } };
         },
     }

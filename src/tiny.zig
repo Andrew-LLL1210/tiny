@@ -5,8 +5,15 @@ pub const sema = @import("tiny/sema.zig");
 pub const run = @import("tiny/run.zig");
 
 pub const max_read_size = std.math.maxInt(usize);
-pub const Ast = parse.Ast;
 pub const Word = run.Word;
+pub const Air = parse.Air;
+pub const Error = parse.Error;
+pub const Machine = run.Machine;
+
+pub fn assemble(air: Air) Machine {
+    _ = air;
+    @panic("TODO");
+}
 
 const Range = struct {
     start: Pos,
@@ -69,6 +76,20 @@ pub const Span = struct {
         } else src.len - 1;
 
         return .{ .line = src[s..e], .start = s };
+    }
+
+    pub fn underline(
+        span: Span,
+        gpa: std.mem.Allocator,
+        src: []const u8,
+    ) std.mem.Allocator.Error![]const u8 {
+        const res = try gpa.dupe(u8, span.line(src).line);
+
+        for (res, span.line(src).start..) |*char, i| if (char.* != '\t') {
+            char.* = if (span.start <= i and i < span.end) '^' else ' ';
+        };
+
+        return res;
     }
 
     pub fn debug(span: Span, src: []const u8) void {
