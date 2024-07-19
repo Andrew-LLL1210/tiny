@@ -106,19 +106,21 @@ pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
 
-    for (machine.memory[0..30], 0..) |word, idx| {
-        try stdout.print("\n{d:0>3} {?d: >6}", .{ idx, word });
-    }
-    try stdout.writeAll("\n\n");
-
-    tiny.run.runMachine(&machine, stdin, stdout) catch |err| {
-        if (machine.ip >= 900) {
-            try stderr.print("{s}: error: {s}\n\n", .{ file_name, @errorName(err) });
-            return;
-        }
-        const node = nodes[index_map[machine.ip] orelse 0];
+    machine.run(stdin, stdout, 1200) catch |err| {
+        const node = nodes[
+            index_map[machine.ip] orelse {
+                try printRunError(
+                    err,
+                    Node{ .comment = .{ .start = 0, .end = 0 } },
+                    gpa,
+                    source,
+                    file_name,
+                    stderr,
+                );
+                return;
+            }
+        ];
         try printRunError(err, node, gpa, source, file_name, stderr);
-        try stderr.print("current instruction decoded from {?d}\n", .{machine.memory[machine.ip]});
     };
 }
 

@@ -68,7 +68,7 @@ pub fn analyze(
         spans_list.deinit();
     }
 
-    inline for (.{ "printInteger", "inputInteger", "printString", "inputString" }, 0..) |name, idx| {
+    inline for (.{ "printInteger", "printString", "inputInteger", "inputString" }, 0..) |name, idx| {
         try labels.append(.{ .builtin_name = name });
         try label_indices.putNoClobber(name, idx);
     }
