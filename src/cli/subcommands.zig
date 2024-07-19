@@ -1,7 +1,7 @@
 const std = @import("std");
 const tiny = @import("tiny");
 
-const Node = tiny.parse.Ast.Node;
+const Node = tiny.parse.Node;
 
 pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .fmt;
@@ -101,23 +101,24 @@ pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
     const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
     defer air.deinit(gpa);
 
-    var machine = tiny.assemble(air);
-
-    //for (assembly.listing, 0..) |word, idx| {
-    //std.debug.print("{d:0>3} {?d: >6}\n", .{ idx, word });
-    //}
+    var machine, const index_map = tiny.assemble(air);
 
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
 
-    tiny.run.runMachine(&machine, stdin, stdout) catch |err| {
-        //if (machine.ip >= .len) {
-        try stderr.print("{s}: error: {s}\n\n", .{ file_name, @errorName(err) });
-        return;
+    for (machine.memory[0..30], 0..) |word, idx| {
+        try stdout.print("\n{d:0>3} {?d: >6}", .{ idx, word });
+    }
+    try stdout.writeAll("\n\n");
 
-        //        }
-        //      const node = ast.nodes[assembly.index_map[machine.ip] orelse 0];
-        //    try printRunError(err, node, gpa, source, file_name, stderr);
+    tiny.run.runMachine(&machine, stdin, stdout) catch |err| {
+        if (machine.ip >= 900) {
+            try stderr.print("{s}: error: {s}\n\n", .{ file_name, @errorName(err) });
+            return;
+        }
+        const node = nodes[index_map[machine.ip] orelse 0];
+        try printRunError(err, node, gpa, source, file_name, stderr);
+        try stderr.print("current instruction decoded from {?d}\n", .{machine.memory[machine.ip]});
     };
 }
 
@@ -221,13 +222,13 @@ fn printErrors(
 }
 
 fn printRunError(err: anyerror, node: Node, gpa: Allocator, source: []const u8, file_name: []const u8, w: anytype) !void {
-    const line = node.span().line(source);
-    const pos = node.span().range(source).start;
+    const line = node.jointSpan().line(source);
+    const pos = node.jointSpan().range(source).start;
     const line2 = try gpa.dupe(u8, line.line);
     defer gpa.free(line2);
 
     for (line2, line.start..) |*char, i| if (char.* != '\t') {
-        char.* = if (node.span().start <= i and i < node.span().end) '^' else ' ';
+        char.* = if (node.jointSpan().start <= i and i < node.jointSpan().end) '^' else ' ';
     };
 
     try w.print("{s}:{d}:{d}: error: {s}\n{s}\n{s}\n\n", .{

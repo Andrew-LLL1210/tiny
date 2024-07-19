@@ -169,7 +169,7 @@ pub fn analyze(
                     break :blk;
                 }
 
-                try statements.append(.{ .operation = .{ mnemonic, .{ .number = 0 } } });
+                try statements.append(.{ .operation = .{ mnemonic, .{ .number = number } } });
             },
             .op_string => |spans| {
                 if (!std.ascii.eqlIgnoreCase(spans[0].slice(source), "dc")) {
@@ -311,7 +311,7 @@ pub fn parse(
     return try nodes.toOwnedSlice();
 }
 
-const Node = union(enum) {
+pub const Node = union(enum) {
     comment: Span,
     label: [2]Span,
     op_single: Span,
@@ -330,7 +330,7 @@ const Node = union(enum) {
         }
     }
 
-    fn jointSpan(node: Node) Span {
+    pub fn jointSpan(node: Node) Span {
         return switch (node) {
             .comment, .op_single => |x| x,
             inline else => |xs| .{ .start = xs[0].start, .end = xs[1].end },
@@ -504,11 +504,11 @@ const mnemonic_map = MnemonicMap.initComptime(&.{
     .{ "pusha", .pusha },
 });
 
-const Mnemonic = enum(Word) {
+pub const Mnemonic = enum(Word) {
     stop = 0,
     ld,
-    lda,
     ldi,
+    lda,
     st,
     sti,
     add,
@@ -565,6 +565,10 @@ test "format comment before label/operation" {
         \\label:
         \\
     );
+}
+
+test "format numbers" {
+    try testIdempotence("    ld 42\n");
 }
 
 fn testIdempotence(src: []const u8) !void {
