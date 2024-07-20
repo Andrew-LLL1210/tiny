@@ -11,6 +11,12 @@ pub const Machine = struct {
     sp: u16 = 900,
     bp: u16 = 900,
 
+    pub fn load(listing: []const ?Word) Machine {
+        var machine = Machine{};
+        for (listing, 0..) |word, i| machine.memory[i] = word;
+        return machine;
+    }
+
     pub fn run(
         machine: *Machine,
         stdin: anytype,
@@ -120,28 +126,41 @@ pub const Op = enum(u32) {
         return .{ .inputs = &inputs, .outputs = &outputs, .action = action };
     }
 
+    fn initMove(input: anytype, output: anytype) Operation {
+        return init(.{input}, .{output}, functions.move);
+    }
+
     fn operation(op: Op) Operation {
         return switch (op) {
             .stop => init(.{}, .{}, functions.stop),
-            .ld => init(.{.arg_d}, .{.acc}, functions.move),
-            .ld_imm => init(.{.arg}, .{.acc}, functions.move),
-            .ldi => init(.{.arg_d_d}, .{.acc}, functions.move),
-            .lda => init(.{.arg}, .{.acc}, functions.move),
-            .st => init(.{.acc}, .{.arg_d}, functions.move),
-            .sti => init(.{.acc}, .{.arg_d_d}, functions.move),
-            .jmp => init(.{.arg}, .{.ip}, functions.move),
-            .push => init(.{.acc}, .{.stack}, functions.move),
+            .ld => initMove(.arg_d, .acc),
+            .ldi => initMove(.arg_d_d, .acc),
+            .lda => initMove(.arg, .acc),
+            .st => initMove(.acc, .arg_d),
+            .sti => initMove(.acc, .arg_d_d),
             .add => init(.{ .acc, .arg_d }, .{.acc}, functions.add),
             .sub => init(.{ .acc, .arg_d }, .{.acc}, functions.sub),
             .mul => init(.{ .acc, .arg_d }, .{.acc}, functions.mul),
             .div => init(.{ .acc, .arg_d }, .{.acc}, functions.div),
+            .in => initMove(.io, .acc),
+            .out => initMove(.acc, .io),
+            .jmp => initMove(.arg, .ip),
+            .jg, .jl, .je, .jge, .jle, .jne => init(.{ .acc, .arg }, .{.ip}, functions.jump),
+
+            .call => init(.{.arg}, .{}, functions.move),
+            .ret => init(.{}, .{}, functions.ret),
+            .push => initMove(.acc, .stack),
+            .pop => initMove(.stack, .acc),
+            .ldparam => initMove(.param, .acc),
+            .push_addr => initMove(.arg_d, .stack),
+            .pop_addr => initMove(.stack, .arg_d),
+            .pusha => initMove(.arg, .stack),
+
+            .ld_imm => initMove(.arg, .acc),
             .add_imm => init(.{ .acc, .arg }, .{.acc}, functions.add),
             .sub_imm => init(.{ .acc, .arg }, .{.acc}, functions.sub),
             .mul_imm => init(.{ .acc, .arg }, .{.acc}, functions.mul),
             .div_imm => init(.{ .acc, .arg }, .{.acc}, functions.div),
-            .call => init(.{.arg}, .{}, functions.move),
-
-            inline else => |tag| @panic("TODO operation " ++ @tagName(tag)),
         };
     }
 };
@@ -162,6 +181,36 @@ const functions = struct {
     }
     fn div(xs: []Word, _: *Machine) Error!void {
         xs[0] = @rem(xs[0], xs[1]);
+    }
+
+    fn ret(_: []Word, machine: *Machine) Error!void {
+        if (machine.bp + 2 >= 900) return Error.stack_underflow;
+        const base_pointer = machine.memory[machine.bp] orelse
+            return Error.dereference_is_null;
+        const instruction_pointer = machine.memory[machine.bp + 1] orelse
+            return Error.dereference_is_null;
+        if (base_pointer < 0 or base_pointer >= 900 or
+            instruction_pointer < 0 or instruction_pointer >= 900)
+            return Error.dereference_out_of_bounds;
+
+        machine.sp = machine.bp + 2;
+        machine.bp = @intCast(base_pointer);
+        machine.ip = @intCast(instruction_pointer);
+    }
+
+    fn jump(xs: []Word, machine: *Machine) Error!void {
+        const op: Op = @enumFromInt(@abs(machine.memory[machine.ip - 1].?) / 1000);
+        const comp_op: std.math.CompareOperator = switch (op) {
+            .jg => .gt,
+            .jl => .lt,
+            .je => .eq,
+            .jge => .gte,
+            .jle => .lte,
+            .jne => .neq,
+            else => unreachable,
+        };
+
+        xs[0] = if (std.math.compare(xs[0], comp_op, 0)) xs[1] else machine.ip;
     }
 
     fn call(xs: []Word, machine: *Machine, stdin: anytype, stdout: anytype) Error!void {
@@ -227,6 +276,7 @@ const Location = union(enum) {
     io,
     ip,
     stack,
+    param,
 
     fn get(loc: Location, machine: *Machine, stdin: anytype) Error!Word {
         return switch (loc) {
@@ -252,13 +302,18 @@ const Location = union(enum) {
                 machine.sp += 1;
                 return res;
             },
+            .param => {
+                const arg: u16 = @intCast(@mod(machine.memory[machine.ip - 1].?, 1000));
+                if (arg + machine.bp >= 900) return Error.dereference_out_of_bounds;
+                return machine.memory[arg + machine.bp] orelse return Error.variable_is_null;
+            },
         };
     }
 
     fn set(loc: Location, machine: *Machine, stdout: anytype, x: Word) Error!void {
         switch (loc) {
+            .arg, .param => unreachable,
             .acc => machine.acc = x,
-            .arg => unreachable,
             .arg_d => {
                 const arg = @mod(machine.memory[machine.ip - 1].?, 1000);
                 if (arg < 0 or arg >= 900) return Error.dereference_out_of_bounds;
