@@ -1,0 +1,10 @@
+    jmp main
+string: dc "hello world!\n" ; hello
+    push
+
+; entry point of program
+main:
+    ; remember that you lda before printing
+    lda string
+    call printString
+    stop ; end
