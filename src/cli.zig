@@ -1,8 +1,9 @@
 const std = @import("std");
 const subcommands = @import("cli/subcommands.zig");
+pub const version = "0.1.0";
 
 // cli design ripped from github.com/kristoff-it/ziggy on 2024-05-25
-pub const Command = enum { run, fmt, check, flow, help };
+pub const Command = enum { run, fmt, check, flow, help, lsp };
 
 var ok: bool = true;
 pub fn main() !void {
@@ -29,6 +30,7 @@ pub fn main() !void {
         .check => subcommands.check_exe(args[2..], gpa),
         .flow => @panic("TODO"),
         .run => subcommands.run_exe(args[2..], gpa),
+        .lsp => @import("cli/lsp.zig").run(gpa, args[2..]),
         .help => fatalHelp(),
     }) catch |err| switch (err) {
         error.ReportedError => ok = false,

@@ -1,7 +1,7 @@
 const std = @import("std");
 const tiny = @import("tiny");
 
-const Node = tiny.parse.Ast.Node;
+const Node = tiny.parse.Node;
 
 pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .fmt;
@@ -11,19 +11,29 @@ pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
     const source = getSource(gpa, command) orelse return;
     defer gpa.free(source);
 
-    const ast = try tiny.Ast.init(gpa, source, true);
-    defer gpa.free(ast.nodes);
-    defer gpa.free(ast.errors);
+    var errors = std.ArrayList(tiny.Error).init(gpa);
+    defer errors.deinit();
 
-    if (ast.errors.len > 0) {
-        try printErrors(ast, gpa, source, command.file_name(), stderr);
+    const nodes = try tiny.parse.parse(gpa, source, true, &errors);
+    defer gpa.free(nodes);
+
+    if (errors.items.len > 0) {
+        try printErrors(errors.items, gpa, source, command.file_name(), stderr);
         return error.ReportedError;
     }
+
+    const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
+    defer air.deinit(gpa);
 
     var w = std.ArrayList(u8).init(gpa);
     errdefer w.deinit();
 
-    try ast.render(source, w.writer());
+    if (errors.items.len > 0) {
+        try tiny.parse.renderNodes(nodes, source, w.writer());
+    } else {
+        try tiny.parse.renderAir(air, source, w.writer());
+    }
+
     const res = try w.toOwnedSlice();
     defer gpa.free(res);
 
@@ -50,18 +60,23 @@ pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
     const stdout = std.io.getStdOut().writer();
     const source = getSource(gpa, command) orelse return;
     defer gpa.free(source);
+    var errors = std.ArrayList(tiny.Error).init(gpa);
+    defer errors.deinit();
 
-    const ast = try tiny.Ast.init(gpa, source, false);
-    defer gpa.free(ast.nodes);
-    defer gpa.free(ast.errors);
+    const nodes = try tiny.parse.parse(gpa, source, false, &errors);
+    defer gpa.free(nodes);
+    const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
+    defer air.deinit(gpa);
 
-    try printErrors(
-        ast,
-        gpa,
-        source,
-        command.file_name(),
-        stdout,
-    );
+    if (errors.items.len > 0) {
+        try printErrors(
+            errors.items,
+            gpa,
+            source,
+            command.file_name(),
+            stdout,
+        );
+    }
 }
 
 pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
@@ -70,34 +85,41 @@ pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
     const file_name = command.file_name();
     const stderr = std.io.getStdErr().writer();
 
+    var errors = std.ArrayList(tiny.Error).init(gpa);
+    defer errors.deinit();
+
     const source = getSource(gpa, command) orelse return;
     defer gpa.free(source);
-    const ast = try tiny.Ast.init(gpa, source, false);
-    defer gpa.free(ast.nodes);
-    defer gpa.free(ast.errors);
+    const nodes = try tiny.parse.parse(gpa, source, false, &errors);
+    defer gpa.free(nodes);
 
-    if (ast.errors.len > 0) {
-        try printErrors(ast, gpa, source, file_name, stderr);
+    if (errors.items.len > 0) {
+        try printErrors(errors.items, gpa, source, file_name, stderr);
         return;
     }
 
-    var assembly = try tiny.sema.assemble(gpa, ast, source);
-    defer assembly.deinit(gpa);
+    const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
+    defer air.deinit(gpa);
 
-    //for (assembly.listing, 0..) |word, idx| {
-    //std.debug.print("{d:0>3} {?d: >6}\n", .{ idx, word });
-    //}
+    var machine, const index_map = tiny.assemble(air);
 
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
 
-    var machine = tiny.run.Machine.load(assembly.listing);
-    tiny.run.runMachine(&machine, stdin, stdout) catch |err| {
-        if (machine.ip >= assembly.index_map.len) {
-            try stderr.print("{s}: error: {s}\n\n", .{ file_name, @errorName(err) });
-            return;
-        }
-        const node = ast.nodes[assembly.index_map[machine.ip] orelse 0];
+    machine.run(stdin, stdout, 1200) catch |err| {
+        const node = nodes[
+            index_map[machine.ip] orelse {
+                try printRunError(
+                    err,
+                    Node{ .comment = .{ .start = 0, .end = 0 } },
+                    gpa,
+                    source,
+                    file_name,
+                    stderr,
+                );
+                return;
+            }
+        ];
         try printRunError(err, node, gpa, source, file_name, stderr);
     };
 }
@@ -134,36 +156,81 @@ fn getSource(gpa: Allocator, command: Command) ?[]const u8 {
     }
 }
 
-fn printErrors(ast: tiny.Ast, gpa: Allocator, source: []const u8, file_name: []const u8, w: anytype) !void {
-    for (ast.errors) |err| {
-        const line = err.span.line(source);
-        const pos = err.span.range(source).start;
-        const line2 = try gpa.dupe(u8, line.line);
-        defer gpa.free(line2);
+fn printErrors(
+    errors: []const tiny.Error,
+    gpa: Allocator,
+    source: []const u8,
+    file_name: []const u8,
+    w: anytype,
+) !void {
+    for (errors) |err| switch (err) {
+        .duplicate_label => |spans| {
+            const err_line = spans[0].line(source).line;
+            const err_pos = spans[0].range(source).start;
+            const err_underline = try spans[0].underline(gpa, source);
+            defer gpa.free(err_underline);
 
-        for (line2, line.start..) |*char, i| if (char.* != '\t') {
-            char.* = if (err.span.start <= i and i < err.span.end) '^' else ' ';
-        };
+            const note_line = spans[1].line(source).line;
+            const note_pos = spans[1].range(source).start;
+            const note_underline = try spans[1].underline(gpa, source);
+            defer gpa.free(note_underline);
 
-        try w.print("{s}:{d}:{d}: error: {s}\n{s}\n{s}\n\n", .{
-            file_name,
-            pos.row + 1,
-            pos.col + 1,
-            @tagName(err.tag),
-            line.line,
-            line2,
-        });
-    }
+            try w.print("{s}:{d}:{d}: error: duplicate label\n{s}\n{s}\n" ++
+                "{s}:{d}:{d}: note: original label here\n{s}\n{s}\n\n", .{
+                file_name,
+                err_pos.row + 1,
+                err_pos.col + 1,
+                err_line,
+                err_underline,
+                file_name,
+                note_pos.row + 1,
+                note_pos.col + 1,
+                note_line,
+                note_underline,
+            });
+        },
+        .builtin_label_redefinition => |span_name| {
+            const line = span_name[0].line(source).line;
+            const pos = span_name[0].range(source).start;
+            const underline = try span_name[0].underline(gpa, source);
+            defer gpa.free(underline);
+
+            try w.print("{s}:{d}:{d}: error: redefinition of builtin label {s}\n{s}\n{s}\n\n", .{
+                file_name,
+                pos.row + 1,
+                pos.col + 1,
+                @as([]const u8, span_name[1]),
+                line,
+                underline,
+            });
+        },
+        inline else => |span| {
+            _ = @as(Span, span);
+            const line = span.line(source).line;
+            const pos = span.range(source).start;
+            const underline = try span.underline(gpa, source);
+            defer gpa.free(underline);
+
+            try w.print("{s}:{d}:{d}: error: {s}\n{s}\n{s}\n\n", .{
+                file_name,
+                pos.row + 1,
+                pos.col + 1,
+                @tagName(err),
+                line,
+                underline,
+            });
+        },
+    };
 }
 
 fn printRunError(err: anyerror, node: Node, gpa: Allocator, source: []const u8, file_name: []const u8, w: anytype) !void {
-    const line = node.span().line(source);
-    const pos = node.span().range(source).start;
+    const line = node.jointSpan().line(source);
+    const pos = node.jointSpan().range(source).start;
     const line2 = try gpa.dupe(u8, line.line);
     defer gpa.free(line2);
 
     for (line2, line.start..) |*char, i| if (char.* != '\t') {
-        char.* = if (node.span().start <= i and i < node.span().end) '^' else ' ';
+        char.* = if (node.jointSpan().start <= i and i < node.jointSpan().end) '^' else ' ';
     };
 
     try w.print("{s}:{d}:{d}: error: {s}\n{s}\n{s}\n\n", .{
@@ -175,6 +242,8 @@ fn printRunError(err: anyerror, node: Node, gpa: Allocator, source: []const u8, 
         line2,
     });
 }
+
+const Span = tiny.Span;
 
 const Mode = enum { file, stdin };
 const Command = union(Mode) {
