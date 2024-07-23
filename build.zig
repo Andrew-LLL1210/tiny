@@ -37,7 +37,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const lsp = b.dependency("zig-lsp-kit", .{});
+
     exe.root_module.addImport("tiny", tiny);
+    exe.root_module.addImport("lsp", lsp.module("lsp"));
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -48,4 +51,7 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const check_step = b.step("check", "ensure that the build suceeds");
+    check_step.dependOn(&exe.step);
 }

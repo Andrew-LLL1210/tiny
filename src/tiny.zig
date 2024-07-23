@@ -5,6 +5,7 @@ pub const run = @import("tiny/run.zig");
 
 pub const max_read_size = std.math.maxInt(usize);
 pub const Word = run.Word;
+pub const Node = parse.Node;
 pub const Air = parse.Air;
 pub const Error = parse.Error;
 pub const Machine = run.Machine;
