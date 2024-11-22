@@ -58,7 +58,7 @@ pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .check;
     const command = try Command.parse(args);
     const stdout = std.io.getStdOut().writer();
-    const source = getSource(gpa, command) orelse return;
+    const source = getSource(gpa, command) orelse return error.ReportedError;
     defer gpa.free(source);
     var errors = std.ArrayList(tiny.Error).init(gpa);
     defer errors.deinit();
@@ -79,6 +79,42 @@ pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
     }
 }
 
+pub fn flow_exe(args: [][]const u8, gpa: Allocator) !void {
+    Command.subcommand = .flow;
+    const command = try Command.parse(args);
+    const stdout = std.io.getStdOut().writer();
+    const source = getSource(gpa, command) orelse return error.ReportedError;
+    defer gpa.free(source);
+    var errors = std.ArrayList(tiny.Error).init(gpa);
+    defer errors.deinit();
+
+    const nodes = try tiny.parse.parse(gpa, source, false, &errors);
+    defer gpa.free(nodes);
+    const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
+    defer air.deinit(gpa);
+
+    if (errors.items.len > 0) {
+        try printErrors(
+            errors.items,
+            gpa,
+            source,
+            command.file_name(),
+            stdout,
+        );
+        return;
+    }
+
+    var w = std.ArrayList(u8).init(gpa);
+    errdefer w.deinit();
+
+    try tiny.parse.renderFlow(air, source, w.writer());
+
+    const res = try w.toOwnedSlice();
+    defer gpa.free(res);
+
+    try stdout.writeAll(res);
+}
+
 pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
     Command.subcommand = .run;
     const command = try Command.parse(args);
@@ -88,14 +124,14 @@ pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
     var errors = std.ArrayList(tiny.Error).init(gpa);
     defer errors.deinit();
 
-    const source = getSource(gpa, command) orelse return;
+    const source = getSource(gpa, command) orelse return error.ReportedError;
     defer gpa.free(source);
     const nodes = try tiny.parse.parse(gpa, source, false, &errors);
     defer gpa.free(nodes);
 
     if (errors.items.len > 0) {
         try printErrors(errors.items, gpa, source, file_name, stderr);
-        return;
+        return error.ReportedError;
     }
 
     const air = try tiny.parse.analyze(gpa, nodes, source, &errors);
@@ -247,7 +283,7 @@ const Span = tiny.Span;
 
 const Mode = enum { file, stdin };
 const Command = union(Mode) {
-    var subcommand: enum { fmt, check, run } = undefined;
+    var subcommand: enum { fmt, check, run, flow } = undefined;
 
     file: []const u8,
     stdin: void,

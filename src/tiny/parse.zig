@@ -386,6 +386,23 @@ pub fn renderAir(air: Air, src: []const u8, writer: anytype) !void {
     }
 }
 
+pub fn renderFlow(air: Air, src: []const u8, writer: anytype) !void {
+    for (air.statements, 0..) |statement, i| {
+        switch (statement) {
+            .comment => continue,
+            .mark_label => {},
+            .directive => continue,
+            .operation => |op| if (!op[0].isFlow()) continue,
+        }
+
+        if (statement != .mark_label) try writer.writeAll("    ");
+
+        try renderStatement(air, i, src, writer);
+
+        try writer.writeAll("\n");
+    }
+}
+
 fn renderStatement(
     air: Air,
     idx: usize,
@@ -530,6 +547,13 @@ pub const Mnemonic = enum(Word) {
     jle,
     jne,
     pusha = 26,
+
+    pub fn isFlow(mnemonic: Mnemonic) bool {
+        return switch (mnemonic) {
+            .stop, .jmp, .jg, .jl, .je, .jge, .jle, .jne, .call, .ret => true,
+            else => false,
+        };
+    }
 };
 
 const log = std.log.scoped(.parse);
