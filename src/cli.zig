@@ -11,12 +11,18 @@ pub const GlobalOptions = struct {
     color: enum { auto, yes, no } = .auto,
 };
 pub const Subcommand = union(enum) {
-    check: struct {},
+    check: struct {
+        stdin: bool = false,
+    },
     fmt: struct {
+        stdin: bool = false,
         mode: enum { default } = .default,
     },
-    run: struct {},
+    run: struct {
+        stdin: bool = false,
+    },
     flow: struct {},
+    lsp: struct {},
 };
 
 var ok: bool = true;
