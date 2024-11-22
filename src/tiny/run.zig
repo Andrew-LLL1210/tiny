@@ -180,7 +180,7 @@ const functions = struct {
         xs[0] *= xs[1];
     }
     fn div(xs: []Word, _: *Machine) Error!void {
-        xs[0] = @rem(xs[0], xs[1]);
+        xs[0] = @divTrunc(xs[0], xs[1]);
     }
 
     fn ret(_: []Word, machine: *Machine) Error!void {
@@ -245,7 +245,7 @@ const functions = struct {
                 if (addr < 0 or addr >= 900) return Error.dereference_out_of_bounds;
 
                 var buf = std.BoundedArray(u8, 101).init(0) catch unreachable;
-                stdin.streamUntilDelimiter(buf.writer(), '\n', 100) catch return Error.read_too_long;
+                try stdin.streamUntilDelimiter(buf.writer(), '\n', 100);
                 buf.append(0) catch return Error.io_error;
 
                 for (buf.slice(), @abs(addr)..) |byte, index| {
@@ -359,7 +359,10 @@ const Error = error{
     halt,
     null_operation,
     invalid_instruction,
-};
+    Overflow,
+    EndOfStream,
+    StreamTooLong,
+} || std.fs.File.ReadError;
 
 fn readStub(_: void, _: []u8) error{}!usize {
     unreachable;
