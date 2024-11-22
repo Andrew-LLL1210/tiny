@@ -5,6 +5,20 @@ pub const version = "0.1.0";
 // cli design ripped from github.com/kristoff-it/ziggy on 2024-05-25
 pub const Command = enum { run, fmt, check, help, lsp };
 
+// total cli design
+// github ikskuh/zig-args
+pub const GlobalOptions = struct {
+    color: enum { auto, yes, no } = .auto,
+};
+pub const Subcommand = union(enum) {
+    check: struct {},
+    fmt: struct {
+        mode: enum { default } = .default,
+    },
+    run: struct {},
+    flow: struct {},
+};
+
 var ok: bool = true;
 pub fn main() !void {
     ok = true;
