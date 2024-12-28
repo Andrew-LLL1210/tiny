@@ -24,8 +24,8 @@
     // internet connectivity.
     .dependencies = .{
         .@"zig-lsp-kit" = .{
-            .url = "https://github.com/kristoff-it/zig-lsp-kit/archive/master.tar.gz",
-            .hash = "1220b9ce6dc0e1fbcd9e7b406ab164344f81774351495f860a90729187c3c058ef4f",
+            .url = "https://github.com/kristoff-it/zig-lsp-kit/archive/zig-0.14.0-dev.tar.gz",
+            .hash = "1220769d4220181e20f968c6b205e54774c44af39884b8c1f89548e280324850f0b4",
         },
     },
     .paths = .{

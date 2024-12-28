@@ -3,7 +3,7 @@ const tiny = @import("tiny");
 
 const Node = tiny.parse.Node;
 
-pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
+pub fn fmt_exe(args: []const []const u8, gpa: Allocator) !void {
     Command.subcommand = .fmt;
     const command = try Command.parse(args);
 
@@ -54,7 +54,7 @@ pub fn fmt_exe(args: [][]const u8, gpa: Allocator) !void {
     }
 }
 
-pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
+pub fn check_exe(args: []const []const u8, gpa: Allocator) !void {
     Command.subcommand = .check;
     const command = try Command.parse(args);
     const stdout = std.io.getStdOut().writer();
@@ -79,7 +79,7 @@ pub fn check_exe(args: [][]const u8, gpa: Allocator) !void {
     }
 }
 
-pub fn run_exe(args: [][]const u8, gpa: Allocator) !void {
+pub fn run_exe(args: []const []const u8, gpa: Allocator) !void {
     Command.subcommand = .run;
     const command = try Command.parse(args);
     const file_name = command.file_name();
@@ -259,7 +259,7 @@ const Command = union(Mode) {
         };
     }
 
-    fn parse(args: [][]const u8) error{ReportedError}!Command {
+    fn parse(args: []const []const u8) error{ReportedError}!Command {
         var file: ?[]const u8 = null;
         var mode: ?Mode = null;
 
