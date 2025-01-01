@@ -1,7 +1,10 @@
 const std = @import("std");
+const tiny = @import("tiny");
+const lsp = @import("cli/lsp.zig");
 
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa_impl.deinit() == .ok);
     const gpa = gpa_impl.allocator();
     var args = try std.process.argsWithAllocator(gpa);
     defer args.deinit();
@@ -9,23 +12,138 @@ pub fn main() !void {
 
     const stderr = std.io.getStdErr().writer();
 
-    const positional, var options = try eatArgs(&args, gpa, stderr);
+    const positional, const options = try eatArgs(&args, gpa, stderr);
     defer gpa.free(positional);
 
-    for (positional, 1..) |arg, ix|
-        std.debug.print("[{d}] {s}\n", .{ ix, arg });
-
-    inline for (meta.fields(OptionName)) |fenu| {
-        if (comptime Option.at(@enumFromInt(fenu.value)).kind == .option)
-            std.debug.print("--{s} = {?s}\n", .{ fenu.name, @field(options, fenu.name) })
-        else
-            std.debug.print("--{s} = {any}\n", .{ fenu.name, @field(options, fenu.name) });
-    }
-
-    // if (options.help or
-    //     (positional.len > 0 and meta.stringToEnum(Subcommand, positional[0]) == .help))
-    //     fatalHelp();
+    dispatch(gpa, positional, options) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => try stderr.print(
+            "error: {s} while dispatching subcommand\n",
+            .{@errorName(err)},
+        ),
+    };
 }
+
+// TODO find better name
+pub fn dispatch(
+    gpa: Allocator,
+    positional: []const []const u8,
+    options: Option.Struct(),
+) !void {
+    if (positional.len == 0) return error.no_subcommand;
+
+    const subcommand = meta.stringToEnum(Subcommand, positional[0]) orelse
+        return error.invalid_subcommand;
+
+    if (options.help or subcommand == .help)
+        fatalHelp();
+
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+
+    const cwd = std.fs.cwd();
+    const max_bytes = 2048 * 10;
+    switch (subcommand) {
+        .run, .check, .flow, .fmt => {
+            var list = std.ArrayList(u8).init(gpa);
+            defer list.deinit();
+
+            if (options.prepend) |path| {
+                if (subcommand == .fmt) return error.invalid_prepend;
+                const file = try std.fs.cwd().openFile(path, .{ .lock = .shared });
+                defer file.close();
+                try file.reader().readAllArrayList(&list, max_bytes);
+            }
+
+            if (options.stdin) {
+                try stdin.readAllArrayList(&list, max_bytes);
+            } else {
+                if (positional.len == 1) return error.expected_positional_filepath;
+                const path = positional[1];
+                const file = try std.fs.cwd().openFile(path, .{ .lock = .shared });
+                defer file.close();
+                try file.reader().readAllArrayList(&list, max_bytes);
+            }
+
+            const src = list.items;
+
+            const fmt_fout = if (options.stdout or positional.len == 1)
+                std.io.getStdOut()
+            else if (options.out) |fp| try cwd.openFile(fp, .{}) else try cwd.openFile(positional[1], .{});
+            defer if (!options.stdout and positional.len != 1) fmt_fout.close();
+
+            const want_comments = subcommand == .fmt and !(options.@"strip-comments" orelse false);
+
+            var errors = std.ArrayList(tiny.parse.Error).init(gpa);
+            defer errors.deinit();
+            const nodes = try tiny.parse.parse(gpa, src, want_comments, &errors);
+            defer gpa.free(nodes);
+            if (errors.items.len > 0) return error.parse_returned_errors;
+
+            const air = try tiny.parse.analyze(gpa, nodes, src, &errors);
+            defer air.deinit(gpa);
+            if (errors.items.len > 0) if (subcommand == .fmt) {
+                try tiny.parse.renderNodes(nodes, src, fmt_fout.writer());
+                return;
+            } else return error.analysis_returned_errors;
+
+            if (subcommand == .fmt) {
+                try tiny.parse.renderAir(air, src, fmt_fout.writer());
+                return;
+            }
+
+            if (subcommand == .check) return;
+            if (subcommand == .flow) {
+                const fout: std.fs.File = if (options.out) |fp|
+                    try std.fs.cwd().createFile(fp, .{
+                        .lock = .exclusive,
+                    })
+                else
+                    std.io.getStdOut();
+                defer if (options.out != null) fout.close();
+                const use_color = options.color orelse true;
+                try tiny.printFlow(air, src, fout, use_color, gpa);
+                return;
+            }
+
+            var machine, const index_map = tiny.assemble(air);
+            const max_cycles = 300;
+            _ = index_map;
+            try machine.run(stdin, stdout, max_cycles);
+        },
+        .lsp => {
+            try lsp.run(gpa);
+        },
+        .help => unreachable,
+    }
+}
+
+const Subcommand = std.meta.FieldEnum(@FieldType(Command, "subcommand"));
+
+pub const Command = struct {
+    subcommand: union(enum) {
+        run: struct {
+            file: FilePath,
+            prepend: ?FilePath,
+        },
+        fmt: struct {
+            file: FilePath,
+            out: FilePath,
+            strip_comments: bool,
+        },
+        check: struct {
+            file: FilePath,
+        },
+        flow: struct {
+            file: FilePath = .stdio,
+        },
+        lsp,
+        help,
+    },
+    color: enum { yes, no, auto } = .auto,
+
+    const FilePath = union(enum) { path: []const u8, stdio };
+};
 
 const ArgPack = struct { []const []const u8, Option.Struct() };
 
@@ -81,33 +199,6 @@ fn eatArgs(
     return .{ positional_list, options };
 }
 
-const Subcommand = std.meta.FieldEnum(@FieldType(Command, "subcommand"));
-
-pub const Command = struct {
-    subcommand: union(enum) {
-        run: struct {
-            file: FilePath,
-            prepend: ?FilePath,
-        },
-        fmt: struct {
-            file: FilePath,
-            out: FilePath,
-            strip_comments: bool,
-        },
-        check: struct {
-            file: FilePath,
-        },
-        flow: struct {
-            file: FilePath = .stdio,
-        },
-        lsp,
-        help,
-    },
-    color: enum { yes, no, auto } = .auto,
-
-    const FilePath = union(enum) { path: []const u8, stdio };
-};
-
 const OptionName = std.meta.DeclEnum(Option.values);
 const Option = struct {
     short: ?u8 = null,
@@ -121,6 +212,7 @@ const Option = struct {
         pub const prepend = Option{ .kind = .option, .short = 'p' };
         pub const help = Option{ .kind = .flag, .short = 'h' };
         pub const stdin = Option{ .kind = .flag };
+        pub const stdout = Option{ .kind = .flag };
     };
 
     fn printHelpLine(name: OptionName, out: std.fs.File.Writer) std.fs.File.WriteError!void {
@@ -265,6 +357,7 @@ fn description(comptime Enum: type, v: Enum) []const u8 {
         .prepend => "File to optionally prepend to the program before interpreting",
         .help => "Print this help menu",
         .stdin => "Take Tiny program from stdin instead of specifying a file",
+        .stdout => "write formatted program to stdout",
     };
 
     @compileError("no descriptions exist for enum " ++ @typeName(Enum));
@@ -274,3 +367,4 @@ const meta = std.meta;
 const mem = std.mem;
 const File = std.fs.File;
 const Type = std.builtin.Type;
+const Allocator = std.mem.Allocator;

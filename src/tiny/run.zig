@@ -165,6 +165,8 @@ pub const Op = enum(u32) {
     }
 };
 
+const word_max = 99999;
+const word_min = -99999;
 const functions = struct {
     fn stop(_: []Word, _: *Machine) Error!void {
         return Error.stop;
@@ -172,12 +174,15 @@ const functions = struct {
     fn move(_: []Word, _: *Machine) Error!void {}
     fn add(xs: []Word, _: *Machine) Error!void {
         xs[0] += xs[1];
+        if (xs[0] > word_max or xs[0] < word_min) return Error.Overflow;
     }
     fn sub(xs: []Word, _: *Machine) Error!void {
         xs[0] -= xs[1];
+        if (xs[0] > word_max or xs[0] < word_min) return Error.Overflow;
     }
     fn mul(xs: []Word, _: *Machine) Error!void {
         xs[0] *= xs[1];
+        if (xs[0] > word_max or xs[0] < word_min) return Error.Overflow;
     }
     fn div(xs: []Word, _: *Machine) Error!void {
         xs[0] = @divTrunc(xs[0], xs[1]);

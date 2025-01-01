@@ -15,9 +15,7 @@ const log = std.log.scoped(.tiny_lsp);
 
 const TinyLsp = lsp.server.Server(Handler);
 
-pub fn run(gpa: std.mem.Allocator, args: []const []const u8) !void {
-    _ = args;
-
+pub fn run(gpa: std.mem.Allocator) !void {
     log.debug("Tiny LSP started!", .{});
 
     var transport = lsp.Transport.init(

@@ -12,6 +12,8 @@ pub const Machine = run.Machine;
 pub const Span = @import("tiny/span.zig").Span;
 pub const Mnemonic = parse.Mnemonic;
 
+const Allocator = std.mem.Allocator;
+
 const printInteger = 900;
 const printString = 925;
 const inputInteger = 950;
@@ -81,6 +83,105 @@ pub fn assemble(air: Air) struct { Machine, [900]?usize } {
 
     return .{ machine_impl, index_map_impl };
 }
+
+pub fn printFlow(
+    air: Air,
+    src: []const u8,
+    fout: std.fs.File,
+    use_color: bool,
+    gpa: Allocator,
+) !void {
+    const config = if (use_color)
+        std.io.tty.detectConfig(fout)
+    else
+        std.io.tty.Config.no_color;
+    const out = fout.writer();
+
+    const extra_label_data = try gpa.alloc(LabelData, air.labels.len);
+    defer gpa.free(extra_label_data);
+    for (extra_label_data) |*x| x.* = .{};
+
+    var ixs_to_print = std.ArrayList(usize).init(gpa);
+    defer ixs_to_print.deinit();
+
+    for (air.statements, 0..) |statement, s_ix| switch (statement) {
+        .comment => {},
+        .mark_label => |ix| {
+            try ixs_to_print.append(s_ix);
+            extra_label_data[ix].seen = true;
+        },
+        .directive => {},
+        .operation => |op| switch (op[0]) {
+            .jmp, .jle, .jl, .jg, .jge, .je, .jne => {
+                extra_label_data[op[1].label].use();
+                try ixs_to_print.append(s_ix);
+            },
+            .ret, .stop => {
+                try ixs_to_print.append(s_ix);
+            },
+            .call => {
+                if (air.labels[op[1].label] == .canonical_name) {
+                    extra_label_data[op[1].label].called = true;
+                    try ixs_to_print.append(s_ix);
+                }
+            },
+            else => {},
+        },
+    };
+
+    for (ixs_to_print.items) |s_ix| switch (air.statements[s_ix]) {
+        .comment, .directive => {},
+        .mark_label => |ix| if (extra_label_data[ix].color()) |color| {
+            try config.setColor(out, color);
+            try out.print("{s}:\n", .{air.labels[ix].canonical_name.slice(src)});
+            try config.setColor(out, .reset);
+        },
+        .operation => |op| switch (op[0]) {
+            .call, .jmp, .jle, .jl, .jg, .jge, .je, .jne => if (extra_label_data[op[1].label].color()) |color| {
+                try config.setColor(out, color);
+                try out.print("    {s} {s}\n", .{
+                    @tagName(op[0]),
+                    air.labels[op[1].label].canonical_name.slice(src),
+                });
+                try config.setColor(out, .reset);
+            },
+
+            .ret, .stop => {
+                try config.setColor(out, .bright_blue);
+                try out.print("{s}\n", .{@tagName(op[0])});
+                try config.setColor(out, .reset);
+            },
+            else => {},
+        },
+    };
+}
+
+const LabelData = struct {
+    seen: bool = false,
+    called: bool = false,
+    used_before: bool = false,
+    used_after: bool = false,
+
+    fn use(data: *LabelData) void {
+        if (data.seen)
+            data.used_after = true
+        else
+            data.used_before = true;
+    }
+
+    fn color(data: *const LabelData) ?std.io.tty.Color {
+        if (!data.seen) return null;
+        if (!data.used_before and !data.used_after and !data.called)
+            return null;
+        if (data.used_before and !data.used_after and !data.called)
+            return .bright_white;
+        if (data.used_after and !data.used_before and !data.called)
+            return .bright_cyan;
+        if (data.called and !data.used_before and !data.used_after)
+            return .bright_blue;
+        return .bright_red;
+    }
+};
 
 test {
     std.testing.refAllDeclsRecursive(@This());
