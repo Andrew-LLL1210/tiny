@@ -40,6 +40,7 @@ pub fn dispatch(
 
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
+    const stderr = ColorPrinter.fromFile(std.io.getStdErr());
 
     const cwd = std.fs.cwd();
     const max_bytes = 2048 * 10;
@@ -48,18 +49,25 @@ pub fn dispatch(
             var list = std.ArrayList(u8).init(gpa);
             defer list.deinit();
 
+            var namer: FileNamer = undefined;
+
             if (options.prepend) |path| {
+                namer.name_1 = path;
                 if (subcommand == .fmt) return error.invalid_prepend;
                 const file = try std.fs.cwd().openFile(path, .{ .lock = .shared });
                 defer file.close();
                 try file.reader().readAllArrayList(&list, max_bytes);
             }
 
+            namer.len_1 = list.items.len;
+
             if (options.stdin) {
+                namer.name_2 = "[stdin]";
                 try stdin.readAllArrayList(&list, max_bytes);
             } else {
                 if (positional.len == 1) return error.expected_positional_filepath;
                 const path = positional[1];
+                namer.name_2 = path;
                 const file = try std.fs.cwd().openFile(path, .{ .lock = .shared });
                 defer file.close();
                 try file.reader().readAllArrayList(&list, max_bytes);
@@ -69,7 +77,8 @@ pub fn dispatch(
 
             const fmt_fout = if (options.stdout or positional.len == 1)
                 std.io.getStdOut()
-            else if (options.out) |fp| try cwd.openFile(fp, .{}) else try cwd.openFile(positional[1], .{});
+            else
+                try cwd.openFile(options.out orelse positional[1], .{});
             defer if (!options.stdout and positional.len != 1) fmt_fout.close();
 
             const want_comments = subcommand == .fmt and !(options.@"strip-comments" orelse false);
@@ -78,14 +87,20 @@ pub fn dispatch(
             defer errors.deinit();
             const nodes = try tiny.parse.parse(gpa, src, want_comments, &errors);
             defer gpa.free(nodes);
-            if (errors.items.len > 0) return error.parse_returned_errors;
+            if (errors.items.len > 0) {
+                try printErrors(errors.items, gpa, src, namer, stderr);
+                return;
+            }
 
             const air = try tiny.parse.analyze(gpa, nodes, src, &errors);
             defer air.deinit(gpa);
             if (errors.items.len > 0) if (subcommand == .fmt) {
                 try tiny.parse.renderNodes(nodes, src, fmt_fout.writer());
                 return;
-            } else return error.analysis_returned_errors;
+            } else {
+                try printErrors(errors.items, gpa, src, namer, stderr);
+                return;
+            };
 
             if (subcommand == .fmt) {
                 try tiny.parse.renderAir(air, src, fmt_fout.writer());
@@ -108,8 +123,9 @@ pub fn dispatch(
 
             var machine, const index_map = tiny.assemble(air);
             const max_cycles = 300;
-            _ = index_map;
-            try machine.run(stdin, stdout, max_cycles);
+            machine.run(stdin, stdout, max_cycles) catch |err| {
+                try printRunError(err, nodes[index_map[machine.ip] orelse 0], gpa, src, namer, stderr);
+            };
         },
         .lsp => {
             try lsp.run(gpa);
@@ -117,6 +133,192 @@ pub fn dispatch(
         .help => unreachable,
     }
 }
+
+fn printErrors(
+    errors: []const tiny.Error,
+    gpa: Allocator,
+    source: []const u8,
+    namer: FileNamer,
+    w: ColorPrinter,
+) !void {
+    for (errors) |err| switch (err) {
+        .duplicate_label => |spans| {
+            const err_line = spans[0].line(source).line;
+            const err_pos = spans[0].range(source).start;
+            const err_underline = try spans[0].underline(gpa, source);
+            defer gpa.free(err_underline);
+
+            const note_line = spans[1].line(source).line;
+            const note_pos = spans[1].range(source).start;
+            const note_underline = try spans[1].underline(gpa, source);
+            defer gpa.free(note_underline);
+
+            try w.print(
+                \\{bright_black}{s}:{d}:{d}: {bright_red}error: {bright_white}duplicate label{reset}
+                \\{s}
+                \\{red}{s}{reset}
+                \\{bright_black}{s}:{d}:{d}: {bright_green}note: {bright_white}original label here{reset}
+                \\{s}
+                \\{green}{s}{reset}
+                \\
+                \\
+            , .{
+                namer.nameSpan(spans[0]),
+                err_pos.row + 1,
+                err_pos.col + 1,
+                err_line,
+                err_underline,
+                namer.nameSpan(spans[1]),
+                note_pos.row + 1,
+                note_pos.col + 1,
+                note_line,
+                note_underline,
+            });
+        },
+        .builtin_label_redefinition => |span_name| {
+            const line = span_name[0].line(source).line;
+            const pos = span_name[0].range(source).start;
+            const underline = try span_name[0].underline(gpa, source);
+            defer gpa.free(underline);
+
+            try w.print(
+                \\{bright_black}{s}:{d}:{d}: {bright_red}error: {bright_white}redefinition of builtin label {s}{reset}
+                \\{s}
+                \\{red}{s}{reset}
+                \\
+                \\
+            , .{
+                namer.nameSpan(span_name[0]),
+                pos.row + 1,
+                pos.col + 1,
+                @as([]const u8, span_name[1]),
+                line,
+                underline,
+            });
+        },
+        inline else => |span| {
+            _ = @as(Span, span);
+            const line = span.line(source).line;
+            const pos = span.range(source).start;
+            const underline = try span.underline(gpa, source);
+            defer gpa.free(underline);
+
+            try w.print(
+                \\{bright_black}{s}:{d}:{d}: {bright_red}error: {bright_white}{s}{reset}
+                \\{s}
+                \\{red}{s}{reset}
+                \\
+                \\
+            , .{
+                namer.nameSpan(span),
+                pos.row + 1,
+                pos.col + 1,
+                @tagName(err),
+                line,
+                underline,
+            });
+        },
+    };
+}
+
+const ColorPrinter = struct {
+    writer: std.fs.File.Writer,
+    config: std.io.tty.Config,
+
+    fn fromFile(file: std.fs.File) ColorPrinter {
+        return .{ .writer = file.writer(), .config = std.io.tty.detectConfig(file) };
+    }
+
+    fn print(printer: ColorPrinter, comptime fmt: []const u8, args: anytype) !void {
+        // for some arcane reason this wasn't working my way
+        // so i'm just ripping std.fmt.format
+        @setEvalBranchQuota(20000);
+        comptime var ix = 0;
+        comptime var arg_ix = 0;
+        inline while (ix < fmt.len) : (ix += 1) {
+            const start = ix;
+
+            inline while (ix < fmt.len) : (ix += 1)
+                if (fmt[ix] == '{') break;
+
+            comptime var end = ix;
+            comptime var unescape_brace = false;
+
+            if (ix + 1 < fmt.len and fmt[ix + 1] == '{') {
+                unescape_brace = true;
+                end += 1;
+                ix += 2;
+            }
+            if (start != end)
+                try printer.writer.writeAll(fmt[start..end]);
+
+            if (unescape_brace) continue;
+            if (ix >= fmt.len) break;
+
+            comptime std.debug.assert(fmt[ix] == '{');
+            ix += 1;
+
+            const fmt_begin = ix;
+            inline while (ix < fmt.len and fmt[ix] != '}') : (ix += 1) {}
+            const fmt_end = ix;
+            if (ix >= fmt.len)
+                @compileError("missing closing }");
+
+            if (comptime meta.stringToEnum(std.io.tty.Color, fmt[fmt_begin..fmt_end])) |color| {
+                try printer.config.setColor(printer.writer, color);
+            } else {
+                try printer.writer.print(fmt[fmt_begin - 1 .. fmt_end + 1], .{args[arg_ix]});
+                arg_ix += 1;
+            }
+        }
+    }
+};
+
+const Node = tiny.Node;
+fn printRunError(
+    err: anyerror,
+    node: Node,
+    gpa: Allocator,
+    source: []const u8,
+    namer: FileNamer,
+    w: ColorPrinter,
+) !void {
+    const line = node.jointSpan().line(source);
+    const pos = node.jointSpan().range(source).start;
+    const line2 = try gpa.dupe(u8, line.line);
+    defer gpa.free(line2);
+
+    for (line2, line.start..) |*char, i| if (char.* != '\t') {
+        char.* = if (node.jointSpan().start <= i and i < node.jointSpan().end) '^' else ' ';
+    };
+
+    try w.print(
+        \\{bright_black}{s}:{d}:{d}: {bright_red}error: {bright_white}{s}{reset}
+        \\{s}
+        \\{red}{s}{reset}
+        \\
+        \\
+    , .{
+        namer.nameSpan(node.jointSpan()),
+        pos.row + 1,
+        pos.col + 1,
+        @errorName(err),
+        line.line,
+        line2,
+    });
+}
+
+const Span = tiny.Span;
+
+const FileNamer = struct {
+    name_1: []const u8,
+    len_1: usize,
+    name_2: []const u8,
+
+    fn nameSpan(x: FileNamer, span: Span) []const u8 {
+        return if (span.start < x.len_1) x.name_1 else x.name_2;
+    }
+};
 
 const Subcommand = std.meta.FieldEnum(@FieldType(Command, "subcommand"));
 
