@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -54,4 +54,32 @@ pub fn build(b: *std.Build) void {
 
     const check_step = b.step("check", "ensure that the build suceeds");
     check_step.dependOn(&exe.step);
+
+    const release_step = b.step("release", "compile binaries for all targets");
+    const targets = [_]std.Target.Query{
+        .{ .cpu_arch = .x86_64, .os_tag = .macos },
+        .{ .cpu_arch = .x86_64, .os_tag = .windows },
+        .{ .cpu_arch = .x86_64, .os_tag = .linux },
+    };
+
+    for (targets) |t| {
+        const release_target = b.resolveTargetQuery(t);
+        const release_exe = b.addExecutable(.{
+            .name = "tiny",
+            .root_source_file = b.path("src/cli.zig"),
+            .target = release_target,
+            .optimize = .ReleaseSafe,
+        });
+
+        exe.root_module.addImport("tiny", tiny);
+        exe.root_module.addImport("lsp", lsp.module("lsp"));
+
+        const target_output = b.addInstallArtifact(release_exe, .{
+            .dest_dir = .{ .override = .{
+                .custom = try t.zigTriple(b.allocator),
+            } },
+        });
+
+        release_step.dependOn(&target_output.step);
+    }
 }

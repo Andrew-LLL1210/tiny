@@ -5,6 +5,7 @@ pub const run = @import("tiny/run.zig");
 
 pub const max_read_size = std.math.maxInt(usize);
 pub const Word = run.Word;
+pub const Ptr = run.Ptr;
 pub const Node = parse.Node;
 pub const Air = parse.Air;
 pub const Error = parse.Error;
@@ -97,6 +98,8 @@ pub fn printFlow(
         std.io.tty.Config.no_color;
     const out = fout.writer();
 
+    try out.writeByte('\n');
+
     const extra_label_data = try gpa.alloc(LabelData, air.labels.len);
     defer gpa.free(extra_label_data);
     for (extra_label_data) |*x| x.* = .{};
@@ -147,8 +150,8 @@ pub fn printFlow(
             },
 
             .ret, .stop => {
-                try config.setColor(out, .bright_blue);
-                try out.print("{s}\n", .{@tagName(op[0])});
+                try config.setColor(out, .bright_magenta);
+                try out.print("{s}\n\n", .{@tagName(op[0])});
                 try config.setColor(out, .reset);
             },
             else => {},
@@ -172,14 +175,14 @@ const LabelData = struct {
     fn color(data: *const LabelData) ?std.io.tty.Color {
         if (!data.seen) return null;
         if (!data.used_before and !data.used_after and !data.called)
-            return null;
+            return .bright_black;
         if (data.used_before and !data.used_after and !data.called)
             return .bright_white;
         if (data.used_after and !data.used_before and !data.called)
             return .bright_cyan;
         if (data.called and !data.used_before and !data.used_after)
-            return .bright_blue;
-        return .bright_red;
+            return .bright_magenta;
+        return .bright_yellow;
     }
 };
 

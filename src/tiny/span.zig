@@ -24,6 +24,10 @@ pub const Span = struct {
         return src[self.start..self.end];
     }
 
+    pub fn subtract(self: Span, dx: usize) Span {
+        return .{ .start = self.start - dx, .end = self.start - dx };
+    }
+
     pub fn range(self: Span, code: []const u8) Range {
         var selection: Range = .{
             .start = .{ .row = 0, .col = 0 },

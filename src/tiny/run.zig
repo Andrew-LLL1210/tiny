@@ -3,13 +3,14 @@ const root = @import("../tiny.zig");
 
 /// A Word is in the range [-10000, 10000];
 pub const Word = i32;
+pub const Ptr = u16;
 
 pub const Machine = struct {
     memory: [900]?Word = .{null} ** 900,
-    ip: u16 = 0,
+    ip: Ptr = 0,
     acc: ?Word = null,
-    sp: u16 = 900,
-    bp: u16 = 900,
+    sp: Ptr = 900,
+    bp: Ptr = 900,
 
     pub fn load(listing: []const ?Word) Machine {
         var machine = Machine{};
@@ -17,26 +18,18 @@ pub const Machine = struct {
         return machine;
     }
 
-    pub fn run(
-        machine: *Machine,
-        stdin: anytype,
-        stdout: anytype,
-        max_cycles: u32,
-    ) Error!void {
-        runMachine(machine, stdin, stdout, max_cycles) catch |err| switch (err) {
-            Error.stop => {},
-            else => return err,
-        };
-    }
+    pub const run = runMachine;
 };
 
 fn runMachine(
     machine: *Machine,
     stdin: anytype,
     stdout: anytype,
-    max_cycles: u32,
+    max_cycles: ?u32,
 ) Error!void {
-    for (0..max_cycles) |_| {
+    var cycle: u32 = 0;
+    while (true) : (cycle += 1) {
+        if (max_cycles) |x| if (cycle >= x) return error.halt;
         if (machine.ip < 0 or machine.ip >= 900)
             return Error.ip_out_of_bounds;
         const operation_encoded = machine.memory[machine.ip] orelse
@@ -52,6 +45,8 @@ fn runMachine(
         const op = opFromCode(instruction / 1000) orelse
             return Error.invalid_instruction;
 
+        if (op == .stop) return;
+
         const operation = op.operation();
 
         var values: [2]Word = undefined;
@@ -66,8 +61,6 @@ fn runMachine(
         for (operation.outputs, 0..) |location, i|
             try location.set(machine, stdout, values[i]);
     }
-
-    return Error.halt;
 }
 
 const printInteger = 900;
@@ -185,16 +178,17 @@ const functions = struct {
         if (xs[0] > word_max or xs[0] < word_min) return Error.Overflow;
     }
     fn div(xs: []Word, _: *Machine) Error!void {
+        if (xs[1] == 0) return Error.division_by_zero;
         xs[0] = @divTrunc(xs[0], xs[1]);
     }
 
     fn ret(_: []Word, machine: *Machine) Error!void {
-        if (machine.bp + 2 >= 900) return Error.stack_underflow;
+        if (machine.bp + 1 >= 900) return Error.stack_underflow;
         const base_pointer = machine.memory[machine.bp] orelse
             return Error.dereference_is_null;
         const instruction_pointer = machine.memory[machine.bp + 1] orelse
             return Error.dereference_is_null;
-        if (base_pointer < 0 or base_pointer >= 900 or
+        if (base_pointer < 0 or base_pointer > 900 or
             instruction_pointer < 0 or instruction_pointer >= 900)
             return Error.dereference_out_of_bounds;
 
@@ -302,15 +296,15 @@ const Location = union(enum) {
             .io => stdin.readByte() catch return Error.io_error,
             .ip => machine.ip,
             .stack => {
-                if (machine.sp + 1 >= 900) return Error.stack_underflow;
+                if (machine.sp >= 900) return Error.stack_underflow;
                 const res = machine.memory[machine.sp] orelse return Error.dereference_is_null;
                 machine.sp += 1;
                 return res;
             },
             .param => {
                 const arg: u16 = @intCast(@mod(machine.memory[machine.ip - 1].?, 1000));
-                if (arg + machine.bp >= 900) return Error.dereference_out_of_bounds;
-                return machine.memory[arg + machine.bp] orelse return Error.variable_is_null;
+                if (arg + machine.bp + 2 >= 900) return Error.dereference_out_of_bounds;
+                return machine.memory[arg + machine.bp + 2] orelse return Error.variable_is_null;
             },
         };
     }
@@ -361,6 +355,7 @@ const Error = error{
     acc_is_null,
     read_too_long,
     number_parse_fail,
+    division_by_zero,
     halt,
     null_operation,
     invalid_instruction,
@@ -379,5 +374,5 @@ test runMachine {
     // machine that STOPS
     var machine = Machine.load(&.{0});
 
-    try runMachine(&machine, in, out);
+    try runMachine(&machine, in, out, 10);
 }

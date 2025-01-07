@@ -1,0 +1,58 @@
+jmp main
+
+main:
+	; pop gives us the last item on the stack
+	ld 42
+	push
+	ld 404
+	pop
+	sub 42
+	je ok_1
+	div 0
+	ok_1:
+
+	; stack is maintained after a function call
+	ld 30
+	push
+
+	ld 2
+	push
+	ld 1
+	push
+	ld 0
+	push
+	call function
+	pop
+	pop
+	pop
+
+	pop
+	sub 30
+	je ok_2
+	div 0
+	ok_2:
+
+	stop
+
+function:
+	; parameters loaded correctly
+	ldparam 0
+	sub 0
+	je ok_f0
+	div 0
+	ok_f0:
+
+	ldparam 1
+	sub 1
+	je ok_f1
+	div 0
+	ok_f1:
+
+	ldparam 2
+	sub 2
+	je ok_f2
+	div 0
+	ok_f2:
+
+	ret
+	

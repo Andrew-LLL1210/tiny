@@ -81,9 +81,9 @@ pub fn next(self: *Tokenizer, src: []const u8) ?Token {
 
             return .{ .comment = .{ .start = start, .end = token_end + 1 } };
         },
-        'A'...'Z', 'a'...'z', '_', '&', '/' => {
+        'A'...'Z', 'a'...'z', '_', '&', '/', '#', '@' => {
             end = for (src[start..], start..) |c, i| switch (c) {
-                'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9', '/' => {},
+                'A'...'Z', 'a'...'z', '_', '&', '[', ']', '0'...'9', '/', '#', '@' => {},
                 else => break i,
             } else src.len;
 

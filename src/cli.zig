@@ -24,13 +24,12 @@ pub fn main() !void {
     };
 }
 
-// TODO find better name
 pub fn dispatch(
     gpa: Allocator,
     positional: []const []const u8,
     options: Option.Struct(),
 ) !void {
-    if (positional.len == 0) return error.no_subcommand;
+    if (positional.len == 0) fatalHelp();
 
     const subcommand = meta.stringToEnum(Subcommand, positional[0]) orelse
         return error.invalid_subcommand;
@@ -78,7 +77,10 @@ pub fn dispatch(
             const fmt_fout = if (options.stdout or positional.len == 1)
                 std.io.getStdOut()
             else
-                try cwd.openFile(options.out orelse positional[1], .{});
+                try cwd.openFile(
+                    options.out orelse positional[1],
+                    .{ .mode = .write_only, .lock = .exclusive },
+                );
             defer if (!options.stdout and positional.len != 1) fmt_fout.close();
 
             const want_comments = subcommand == .fmt and !(options.@"strip-comments" orelse false);
@@ -122,9 +124,13 @@ pub fn dispatch(
             }
 
             var machine, const index_map = tiny.assemble(air);
-            const max_cycles = 300;
+            const max_cycles: ?u32 = if (options.@"max-cycles") |str|
+                try std.fmt.parseUnsigned(u32, str, 10)
+            else
+                null;
+
             machine.run(stdin, stdout, max_cycles) catch |err| {
-                try printRunError(err, nodes[index_map[machine.ip] orelse 0], gpa, src, namer, stderr);
+                try printRunError(err, nodes, &index_map, machine.ip, gpa, src, namer, stderr);
             };
         },
         .lsp => {
@@ -143,14 +149,16 @@ fn printErrors(
 ) !void {
     for (errors) |err| switch (err) {
         .duplicate_label => |spans| {
-            const err_line = spans[0].line(source).line;
-            const err_pos = spans[0].range(source).start;
-            const err_underline = try spans[0].underline(gpa, source);
+            const err_span, const err_src, const err_name = namer.split(spans[0], source);
+            const err_line = err_span.line(err_src).line;
+            const err_pos = err_span.range(err_src).start;
+            const err_underline = try err_span.underline(gpa, err_src);
             defer gpa.free(err_underline);
 
-            const note_line = spans[1].line(source).line;
-            const note_pos = spans[1].range(source).start;
-            const note_underline = try spans[1].underline(gpa, source);
+            const note_span, const note_src, const note_name = namer.split(spans[1], source);
+            const note_line = note_span.line(note_src).line;
+            const note_pos = note_span.range(note_src).start;
+            const note_underline = try note_span.underline(gpa, note_src);
             defer gpa.free(note_underline);
 
             try w.print(
@@ -163,12 +171,12 @@ fn printErrors(
                 \\
                 \\
             , .{
-                namer.nameSpan(spans[0]),
+                err_name,
                 err_pos.row + 1,
                 err_pos.col + 1,
                 err_line,
                 err_underline,
-                namer.nameSpan(spans[1]),
+                note_name,
                 note_pos.row + 1,
                 note_pos.col + 1,
                 note_line,
@@ -176,9 +184,10 @@ fn printErrors(
             });
         },
         .builtin_label_redefinition => |span_name| {
-            const line = span_name[0].line(source).line;
-            const pos = span_name[0].range(source).start;
-            const underline = try span_name[0].underline(gpa, source);
+            const span, const src, const name = namer.split(span_name[0], source);
+            const line = span.line(src).line;
+            const pos = span.range(src).start;
+            const underline = try span.underline(gpa, src);
             defer gpa.free(underline);
 
             try w.print(
@@ -188,7 +197,7 @@ fn printErrors(
                 \\
                 \\
             , .{
-                namer.nameSpan(span_name[0]),
+                name,
                 pos.row + 1,
                 pos.col + 1,
                 @as([]const u8, span_name[1]),
@@ -196,11 +205,11 @@ fn printErrors(
                 underline,
             });
         },
-        inline else => |span| {
-            _ = @as(Span, span);
-            const line = span.line(source).line;
-            const pos = span.range(source).start;
-            const underline = try span.underline(gpa, source);
+        inline else => |span_ext| {
+            const span, const src, const name = namer.split(span_ext, source);
+            const line = span.line(src).line;
+            const pos = span.range(src).start;
+            const underline = try span.underline(gpa, src);
             defer gpa.free(underline);
 
             try w.print(
@@ -210,7 +219,7 @@ fn printErrors(
                 \\
                 \\
             , .{
-                namer.nameSpan(span),
+                name,
                 pos.row + 1,
                 pos.col + 1,
                 @tagName(err),
@@ -274,38 +283,95 @@ const ColorPrinter = struct {
     }
 };
 
+const Ptr = tiny.Ptr;
 const Node = tiny.Node;
 fn printRunError(
     err: anyerror,
-    node: Node,
+    nodes: []const Node,
+    index_map: *const [900]?usize,
+    ip: Ptr,
     gpa: Allocator,
     source: []const u8,
     namer: FileNamer,
     w: ColorPrinter,
 ) !void {
-    const line = node.jointSpan().line(source);
-    const pos = node.jointSpan().range(source).start;
-    const line2 = try gpa.dupe(u8, line.line);
-    defer gpa.free(line2);
+    if (index_map[ip]) |ix| {
+        const node = nodes[ix];
+        const span, const src, const name = namer.split(node.jointSpan(), source);
+        const line = span.line(src);
+        const pos = span.range(src).start;
+        const line2 = try gpa.dupe(u8, line.line);
+        defer gpa.free(line2);
 
-    for (line2, line.start..) |*char, i| if (char.* != '\t') {
-        char.* = if (node.jointSpan().start <= i and i < node.jointSpan().end) '^' else ' ';
-    };
+        for (line2, line.start..) |*char, i| if (char.* != '\t') {
+            char.* = if (node.jointSpan().start <= i and i < node.jointSpan().end) '^' else ' ';
+        };
 
-    try w.print(
-        \\{bright_black}{s}:{d}:{d}: {bright_red}error: {bright_white}{s}{reset}
-        \\{s}
-        \\{red}{s}{reset}
-        \\
-        \\
-    , .{
-        namer.nameSpan(node.jointSpan()),
-        pos.row + 1,
-        pos.col + 1,
-        @errorName(err),
-        line.line,
-        line2,
-    });
+        try w.print(
+            \\{bright_black}{s}:{d}:{d} (IP={d:0>3}): {bright_red}error: {bright_white}{s}{reset}
+            \\{s}
+            \\{red}{s}{reset}
+            \\
+            \\
+        , .{
+            name,
+            pos.row + 1,
+            pos.col + 1,
+            ip,
+            @errorName(err),
+            line.line,
+            line2,
+        });
+    } else {
+        const ip2, const node = x: for (1..ip + 1) |dx| {
+            if (index_map[ip - dx]) |ix| break :x .{ ip - dx, nodes[ix] };
+        } else {
+            try w.print(
+                \\{bright_black}{s}:{d}:{d} (IP={d:0>3}): {bright_red}error: {bright_white}{s}{reset}
+                \\
+                \\
+            , .{
+                namer.name_2,
+                0,
+                0,
+                ip,
+                @errorName(err),
+            });
+            return;
+        };
+
+        const span, const src, const node_name = namer.split(node.jointSpan(), source);
+        const line = span.line(src);
+        const pos = span.range(src).start;
+        const line2 = try gpa.dupe(u8, line.line);
+        defer gpa.free(line2);
+
+        for (line2, line.start..) |*char, i| if (char.* != '\t') {
+            char.* = if (node.jointSpan().start <= i and i < node.jointSpan().end) '^' else ' ';
+        };
+
+        try w.print(
+            \\{bright_black}{s}:{d}:{d} (IP={d:0>3}): {bright_red}error: {bright_white}{s}{reset}
+            \\
+            \\{bright_black}{s}:{d}:{d} (IP={d:0>3}): {bright_green}note: {bright_white}error occurred around here{reset}
+            \\{s}
+            \\{green}{s}{reset}
+            \\
+            \\
+        , .{
+            namer.name_2,
+            0,
+            0,
+            ip,
+            @errorName(err),
+            node_name,
+            pos.row + 1,
+            pos.col + 1,
+            ip2,
+            line.line,
+            line2,
+        });
+    }
 }
 
 const Span = tiny.Span;
@@ -315,8 +381,11 @@ const FileNamer = struct {
     len_1: usize,
     name_2: []const u8,
 
-    fn nameSpan(x: FileNamer, span: Span) []const u8 {
-        return if (span.start < x.len_1) x.name_1 else x.name_2;
+    fn split(x: FileNamer, span: Span, src: []const u8) struct { Span, []const u8, []const u8 } {
+        return if (span.start < x.len_1)
+            .{ span, src, x.name_1 }
+        else
+            .{ span.subtract(x.len_1), src[x.len_1..], x.name_2 };
     }
 };
 
@@ -408,13 +477,14 @@ const Option = struct {
     argument_name: []const u8 = "FILE", // only used for options
 
     const values = struct {
-        pub const out = Option{ .kind = .option, .short = 'o' };
-        pub const @"strip-comments" = Option{ .kind = .no_flag };
         pub const color = Option{ .kind = .no_flag };
-        pub const prepend = Option{ .kind = .option, .short = 'p' };
         pub const help = Option{ .kind = .flag, .short = 'h' };
+        pub const @"max-cycles" = Option{ .kind = .option, .argument_name = "N" };
+        pub const out = Option{ .kind = .option, .short = 'o' };
+        pub const prepend = Option{ .kind = .option, .short = 'p' };
         pub const stdin = Option{ .kind = .flag };
         pub const stdout = Option{ .kind = .flag };
+        pub const @"strip-comments" = Option{ .kind = .no_flag };
     };
 
     fn printHelpLine(name: OptionName, out: std.fs.File.Writer) std.fs.File.WriteError!void {
@@ -560,6 +630,7 @@ fn description(comptime Enum: type, v: Enum) []const u8 {
         .help => "Print this help menu",
         .stdin => "Take Tiny program from stdin instead of specifying a file",
         .stdout => "write formatted program to stdout",
+        .@"max-cycles" => "The number of program cycles after which the program will forcefully stop",
     };
 
     @compileError("no descriptions exist for enum " ++ @typeName(Enum));
