@@ -71,8 +71,8 @@ pub fn build(b: *std.Build) !void {
             .optimize = .ReleaseSafe,
         });
 
-        exe.root_module.addImport("tiny", tiny);
-        exe.root_module.addImport("lsp", lsp.module("lsp"));
+        release_exe.root_module.addImport("tiny", tiny);
+        release_exe.root_module.addImport("lsp", lsp.module("lsp"));
 
         const target_output = b.addInstallArtifact(release_exe, .{
             .dest_dir = .{ .override = .{
